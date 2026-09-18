@@ -1,0 +1,36 @@
+:root {
+  --color-desktop: oklch(81% 0.013 95);
+  --color-panel: oklch(86% 0.008 95);
+  --color-panel-deep: oklch(79% 0.008 95);
+  --color-paper: oklch(98% 0.009 95);
+  --color-ink: oklch(24% 0.016 260);
+  --color-muted: oklch(43% 0.016 260);
+  --color-highlight: oklch(99% 0.002 95);
+  --color-shadow: oklch(52% 0.012 260);
+  --color-accent: oklch(36% 0.15 269);
+  --color-accent-ink: oklch(99% 0 0);
+  --color-focus: oklch(52% 0.23 265);
+  --color-selected: oklch(89% 0.036 260);
+  --color-green: oklch(46% 0.095 165);
+  --color-meter: oklch(69% 0.13 135);
+  --color-screen: oklch(24% 0.016 160);
+  --color-screen-text: oklch(88% 0.09 135);
+  --color-backdrop: oklch(20% 0.02 265 / 0.45);
+  --font-display: "Courier New", monospace;
+  --font-body: Tahoma, Verdana, Arial, sans-serif;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-base: 12px;
+  --text-lg: 16px;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --radius-none: 0;
+  --rule-width: 1px;
+}

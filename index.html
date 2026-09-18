@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#c6c6bf" />
+    <title>Draw Synth — paint a little music</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-window">
+      <div class="titlebar">
+        <span class="tiny-logo">▥</span
+        ><strong id="window-title">Daydream — Draw Synth</strong
+        ><button id="help-top">How to play</button
+        ><button id="import-image">Import Image</button
+        ><button id="toggle-tools" aria-controls="palette" aria-expanded="true">
+          Tools</button
+        ><button
+          id="settings-mobile"
+          aria-controls="inspector"
+          aria-expanded="false"
+        >
+          Properties</button
+        ><button id="full-canvas" aria-pressed="false">Full Canvas</button
+        ><button id="fullscreen" aria-label="Toggle fullscreen">▣</button>
+      </div>
+      <nav id="menubar" class="menubar" aria-label="Application menus"></nav>
+      <div class="toolbar" id="toolbar">
+        <div class="tool-group">
+          <button data-action="new"><span>▱</span>New</button
+          ><button data-action="open"><span>▰</span>Open</button
+          ><button data-action="save"><span>▣</span>Save</button>
+        </div>
+        <div class="tool-group">
+          <button data-action="undo" title="Undo (Ctrl/⌘ Z)">
+            <span>↶</span>Undo</button
+          ><button data-action="redo" title="Redo (Ctrl/⌘ Shift Z)">
+            <span>↷</span>Redo
+          </button>
+        </div>
+        <div class="tool-group">
+          <button data-action="play" class="play-control">
+            <span>▶</span><span class="play-label">Play</span></button
+          ><button data-action="stop"><span>■</span>Stop</button
+          ><button data-action="loop" id="loop-button" aria-pressed="true">
+            <span>⟳</span>Loop
+          </button>
+        </div>
+        <button data-action="export" class="export-button">
+          <span>↗</span>Export<span>▾</span>
+        </button>
+      </div>
+      <div class="full-canvas-controls">
+        <button id="canvas-play">▶ Play</button
+        ><button id="canvas-pause">Ⅱ Pause</button
+        ><button id="exit-full-canvas">Exit Full Canvas</button>
+      </div>
+      <div class="workspace">
+        <aside class="palette window-panel" id="palette">
+          <div class="panel-title" data-drag="palette">
+            Tools
+            <button id="close-tools" aria-label="Collapse Tools">−</button>
+          </div>
+          <div id="tools" class="tools"></div>
+          <div class="brush-preview">
+            <span id="brush-preview-dot"></span
+            ><small id="brush-preview-label">9 px</small>
+          </div>
+          <div class="palette-footer">
+            MAKE<br />SOME<br /><b>NOISE.</b><span>♪</span>
+          </div>
+        </aside>
+        <section class="drawing-area" aria-label="Musical drawing workspace">
+          <div class="document-tabs">
+            <div class="document-tab">
+              <span class="document-dot"></span
+              ><span id="document-name">Daydream.dsy</span
+              ><span id="dirty-indicator">●</span>
+            </div>
+            <span class="canvas-meta" id="canvas-meta">4 BARS · C MAJOR</span>
+          </div>
+          <div class="paper-toolbar">
+            <label
+              >Paper
+              <select id="paper-type" aria-label="Paper type"></select></label
+            ><label class="check"
+              ><input type="checkbox" id="quick-grid" checked /> Grid</label
+            >
+            <div class="zoom-tools">
+              <button id="zoom-out" aria-label="Zoom out">−</button
+              ><button id="zoom-reset" aria-label="Reset zoom">100%</button
+              ><button id="zoom-in" aria-label="Zoom in">+</button>
+            </div>
+          </div>
+          <div class="canvas-frame" id="canvas-frame">
+            <canvas
+              id="drawing"
+              tabindex="0"
+              aria-label="Music canvas. Draw with a pointer, or use Shape stamp and its Place centered button with the keyboard."
+            ></canvas>
+            <div class="canvas-welcome" id="canvas-welcome" hidden>
+              <b>Your next song starts with a line.</b
+              ><span>Pick a color. Draw something. Press play.</span>
+            </div>
+            <div class="paper-badge">DRAW → LISTEN → REPEAT</div>
+          </div>
+          <div class="color-strip">
+            <div class="current-color" id="current-color">
+              <input
+                type="color"
+                id="custom-color"
+                aria-label="Custom paint color"
+                value="#4b7ed5"
+              />
+            </div>
+            <div id="colors" class="colors" aria-label="Paint colors"></div>
+            <div class="color-note">
+              <b>A little color.<br />A little sound.</b>
+            </div>
+          </div>
+          <div class="drawing-tip">
+            <span>✧</span
+            ><span id="drawing-tip"
+              >Higher is brighter. Longer is slower. There’s no wrong way to
+              draw.</span
+            ><span class="stereo-label">STEREO / 44.1 kHz</span>
+          </div>
+        </section>
+        <aside class="inspector window-panel" id="inspector" hidden>
+          <div class="panel-title" data-drag="inspector">
+            Properties
+            <button id="close-settings" aria-label="Collapse Properties">
+              ×
+            </button>
+          </div>
+          <div class="inspector-scroll">
+            <details open>
+              <summary>Tool settings <span id="tool-name">Ink</span></summary>
+              <div class="settings-content" id="tool-settings"></div>
+            </details>
+            <details>
+              <summary>Sound settings <span>♫</span></summary>
+              <div class="settings-content" id="sound-settings"></div>
+            </details>
+            <details>
+              <summary>Paper settings <span>▤</span></summary>
+              <div class="settings-content" id="paper-settings"></div>
+            </details>
+            <details>
+              <summary>Layers <span id="layer-count">4 / 8</span></summary>
+              <div class="layer-list" id="layers"></div>
+              <div class="layer-actions">
+                <button id="add-layer">+ Add layer</button
+                ><button id="layer-options">Edit layer…</button>
+              </div>
+            </details>
+          </div>
+        </aside>
+      </div>
+      <section class="transport" aria-label="Playback controls">
+        <div class="position-display">
+          <span>BAR <b id="bar-position">01</b></span
+          ><span>BEAT <b id="beat-position">01</b></span
+          ><small id="playing-status">READY TO PLAY</small>
+        </div>
+        <div class="tempo-controls">
+          <label for="bpm">TEMPO <span>BPM</span></label>
+          <div>
+            <input
+              id="bpm"
+              type="number"
+              min="40"
+              max="240"
+              value="110"
+              aria-label="Tempo in BPM"
+            /><button id="tap-tempo">Tap</button>
+          </div>
+          <input
+            id="bpm-range"
+            type="range"
+            min="40"
+            max="240"
+            value="110"
+            aria-label="Tempo slider"
+          />
+        </div>
+        <div class="loop-controls">
+          <label for="bars">LOOP LENGTH</label
+          ><select id="bars">
+            <option value="1">1 bar</option>
+            <option value="2">2 bars</option>
+            <option value="4" selected>4 bars</option>
+            <option value="8">8 bars</option></select
+          ><label class="check"
+            ><input id="pingpong" type="checkbox" />Ping-pong</label
+          >
+        </div>
+        <div class="master-controls">
+          <label for="master"
+            >MASTER VOLUME <output id="master-value">65%</output></label
+          >
+          <div>
+            <span>◖</span
+            ><input
+              id="master"
+              type="range"
+              min="0"
+              max="100"
+              value="65"
+            /><input
+              id="master-number"
+              type="number"
+              min="0"
+              max="100"
+              value="65"
+              aria-label="Master volume percent"
+            />
+          </div>
+          <label class="check"
+            ><input id="metronome" type="checkbox" />Metronome</label
+          >
+        </div>
+        <div class="audio-meter" aria-label="Audio level">
+          <span>L</span><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i
+          ><span>R</span><small id="audio-state">AUDIO STANDBY</small>
+        </div>
+      </section>
+      <footer class="statusbar">
+        <span id="status-tool">✎ Ink</span
+        ><span id="status-pointer">Beat — · Note —</span
+        ><span id="status-size">9 px</span><span id="status-zoom">100%</span
+        ><span id="status-message" role="status"
+          >Ready. Press Space to hear your drawing.</span
+        ><span class="resize-grip">◢</span>
+      </footer>
+    </main>
+    <dialog id="dialog">
+      <div class="panel-title">
+        <span id="dialog-title"></span
+        ><button id="dialog-close" aria-label="Close dialog">×</button>
+      </div>
+      <div id="dialog-body"></div>
+    </dialog>
+    <input
+      id="file-input"
+      type="file"
+      accept=".json,.dsy,application/json"
+      hidden
+    />
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

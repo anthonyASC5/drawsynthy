@@ -1,0 +1,15 @@
+{
+  "name": "draw-synth",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test tests/*.test.js",
+    "test:browser": "node tests/browser.mjs && node tests/features.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "prettier": "^3.9.8"
+  }
+}
