@@ -8,7 +8,7 @@ From this directory, run `npm start` (or `python3 -m http.server 8080`), then op
 
 ## Play and draw
 
-The first visit opens an editable demo. Press Play, then add your own marks. New creates a blank drawing. Horizontal position is time; vertical position is pitch. Longer strokes sustain and glide, thicker strokes play louder, and opacity adds brightness. The loop is deterministic, including seeded noise and the reverb impulse.
+Every visit or refresh opens a new blank drawing with default project settings. Add your own marks, then press Play. Open saved drawings through File → Open. New also creates a blank drawing. Horizontal position is time; vertical position is pitch. Longer strokes sustain and glide, thicker strokes play louder, and opacity adds brightness. The loop is deterministic, including seeded noise and the reverb impulse.
 
 - **Pencil:** quiet sine pluck. **Ink:** bright sawtooth lead.
 - **Watercolor:** translucent soft pad. **Marker:** warm triangle sustain.

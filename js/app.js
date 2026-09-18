@@ -39,7 +39,6 @@ import {
   saveProject,
   listProjects,
   removeProject,
-  restoreProject,
   validateProject,
 } from "./storage.js";
 import { exportJSON, exportPNG, exportWAV, exportMIDI } from "./export.js";
@@ -1466,16 +1465,7 @@ async function init() {
   initSeeking();
   initTransport();
   subscribe(sync);
-  try {
-    const saved = await restoreProject();
-    loadProject(saved || demo());
-    if (!saved) scheduleSave();
-  } catch (error) {
-    loadProject(demo());
-    message(
-      "Local storage unavailable. Export a project file to save your work.",
-    );
-  }
+  loadProject(defaults());
   try {
     if (localStorage.getItem("draw-synth-contrast") === "true")
       document.body.classList.add("high-contrast");

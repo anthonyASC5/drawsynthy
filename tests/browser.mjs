@@ -11,9 +11,12 @@ page.on("pageerror", (e) => errors.push(e.message));
 await mkdir("tests/artifacts", { recursive: true });
 try {
   await page.goto("http://127.0.0.1:8080");
-  await page.waitForFunction(
-    () => window.drawSynth?.state.project.strokes.length > 0,
+  await page.waitForFunction(() => window.drawSynth);
+  assert.equal(
+    await page.evaluate(() => window.drawSynth.state.project.strokes.length),
+    0,
   );
+  await page.evaluate(() => window.drawSynth.actions.demo());
   await page.screenshot({ path: "tests/artifacts/desktop.png" });
   assert.equal(await page.locator("#inspector").isVisible(), false);
   const initialCanvas = await page.locator("canvas").boundingBox();
@@ -207,11 +210,51 @@ try {
     .getByRole("button", { name: "Save", exact: true })
     .click();
   await page.waitForTimeout(850);
+  const savedProject = await page.evaluate(() =>
+    window.drawSynth.validateProject(window.drawSynth.state.project),
+  );
   await page.reload();
   await page.waitForFunction(() => window.drawSynth);
+  const freshState = await page.evaluate(async () => {
+    const { defaults } = await import("./js/state.js");
+    const { state } = window.drawSynth;
+    return {
+      project: state.project,
+      defaults: { ...defaults(), id: state.project.id },
+      history: state.history,
+      future: state.future,
+      position: state.position,
+      playing: state.playing,
+      dirty: state.dirty,
+    };
+  });
+  assert.deepEqual(freshState.project, freshState.defaults);
+  assert.notEqual(freshState.project.id, savedProject.id);
+  assert.deepEqual(freshState.history, []);
+  assert.deepEqual(freshState.future, []);
+  assert.equal(freshState.position, 0);
+  assert.equal(freshState.playing, false);
+  assert.equal(freshState.dirty, false);
+  await page.evaluate(() => window.drawSynth.actions.open());
+  await page
+    .locator("#dialog-body")
+    .getByRole("button", { name: "Browser test", exact: true })
+    .click();
+  await page.waitForFunction(
+    (id) => window.drawSynth.state.project.id === id,
+    savedProject.id,
+  );
   assert.equal(
     await page.evaluate(() => window.drawSynth.state.project.name),
     "Browser test",
+  );
+  assert.deepEqual(
+    await page.evaluate(() => window.drawSynth.state.project.strokes),
+    savedProject.strokes,
+  );
+  assert.equal(
+    await page.evaluate(() => window.drawSynth.state.project.bpm),
+    savedProject.bpm,
   );
   for (const [label, ext] of [
     ["Project file", ".dsy"],
@@ -339,7 +382,7 @@ try {
   await touchPage.close();
   assert.deepEqual(errors, []);
   console.log(
-    "Browser checks passed: drawing, undo/redo, playback, tempo, paper independence, shapes, selection, layers, IndexedDB restore, all exports, and 320/375/414/768 px layouts.",
+    "Browser checks passed: drawing, undo/redo, playback, tempo, paper independence, shapes, selection, layers, fresh startup, saved project reopening, all exports, and 320/375/414/768 px layouts.",
   );
 } finally {
   await browser.close();
