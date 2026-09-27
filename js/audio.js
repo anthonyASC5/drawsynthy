@@ -1,13 +1,17 @@
+// Audio is compiled from vector geometry and shared project settings. Live playback and
+// exports consume the same deterministic note representation.
 import {
   pitchAt,
   clamp,
   state,
   emit,
   subscribe,
+  rainPattern,
+  playbackProject,
 } from "./state.js";
 
 // Audio synthesis
-export function compileNotes(project) {
+export function compileNotes(project, includeRain = true) {
   const beats = project.bars * 4,
     notes = [],
     strokeIndex = new Map(project.strokes.map((s) => [s.id, s])),
@@ -23,6 +27,12 @@ export function compileNotes(project) {
       !stroke.points.length
     )
       continue;
+    const xs = stroke.points.map((p) => p.x),
+      ys = stroke.points.map((p) => p.y);
+    const vertical =
+      Math.max(...xs) - Math.min(...xs) <=
+        Math.max(0.0025, stroke.size / 1800) &&
+      Math.max(...ys) - Math.min(...ys) >= 0.015;
     let segments = [],
       current = [stroke.points[0]],
       direction = 0;
@@ -30,11 +40,13 @@ export function compileNotes(project) {
       const p = stroke.points[i],
         prev = stroke.points[i - 1],
         d = Math.sign(p.x - prev.x);
-      if (d && direction && d !== direction) {
+      if (!vertical && d && direction && d !== direction) {
         segments.push(current);
         current = [prev];
       }
       current.push(p);
+      // Stroke direction changes split phrases into monotonic segments. Nearly vertical
+      // strokes become simultaneous pitches, tolerating small horizontal pointer jitter.
       if (d) direction = d;
     }
     segments.push(current);
@@ -43,7 +55,7 @@ export function compileNotes(project) {
       const xs = segment.map((p) => p.x),
         ys = segment.map((p) => p.y);
       if (
-        Math.max(...xs) - Math.min(...xs) > 0.0002 ||
+        !vertical ||
         Math.max(...ys) - Math.min(...ys) < 0.015 ||
         stroke.brush === "Bass"
       )
@@ -59,8 +71,9 @@ export function compileNotes(project) {
             ) + 1,
           ),
         );
+      const x = xs.reduce((n, x) => n + x, 0) / xs.length;
       return Array.from({ length: count }, (_, i) => [
-        { ...segment[0], y: top + ((bottom - top) * i) / (count - 1) },
+        { ...segment[0], x, y: top + ((bottom - top) * i) / (count - 1) },
       ]);
     });
     for (let si = 0; si < segments.length; si++) {
@@ -74,10 +87,13 @@ export function compileNotes(project) {
               ? 0.12
               : 0.2;
       const duration = Math.max(minDuration, end - start);
+      // Each note combines canvas pitch, brush range, and transposition, then clamps to
+      // MIDI limits. Pressure, thickness, layer gain, and opacity shape its sound.
       const pitch = (p) =>
         clamp(
           pitchAt(p.y, project, !!stroke.smudged) +
             (stroke.brush === "Bass" ? -24 : 0) +
+            (stroke.pitchShift || 0) +
             (project.pitchShift || 0),
           0,
           127,
@@ -98,7 +114,7 @@ export function compileNotes(project) {
           beat: Math.max(0, p.x * beats - start),
           pitch: pitch(p),
         })),
-        pitchShift: project.pitchShift || 0,
+        pitchShift: (project.pitchShift || 0) + (stroke.pitchShift || 0),
         brush: stroke.brush,
         color: stroke.color,
         velocity: clamp(
@@ -118,6 +134,8 @@ export function compileNotes(project) {
   for (const n of notes) {
     const stroke = strokeIndex.get(n.id.slice(0, n.id.lastIndexOf("-")));
     if (stroke?.smudged && n.curve.length > 2) {
+      // Smudged curves blend neighboring pitches for smoother motion. Note arrangement
+      // sorts onsets and keeps Bass monophonic across overlapping bass marks.
       const original = n.curve.map((p) => p.pitch),
         strength = stroke.sound.soundSmoothing ?? 0.65;
       n.curve.forEach((p, i) => {
@@ -131,6 +149,10 @@ export function compileNotes(project) {
       n.pitch = n.curve[0].pitch;
     }
   }
+  if (includeRain) notes.push(...compileRainNotes(project));
+  return arrangeNotes(notes);
+}
+function arrangeNotes(notes) {
   notes.sort((a, b) => a.start - b.start);
   const bass = notes.filter((n) => n.brush === "Bass");
   for (let i = 0; i < bass.length - 1; i++)
@@ -140,12 +162,75 @@ export function compileNotes(project) {
     );
   return notes;
 }
+export function compileRainNotes(project) {
+  if (!project.rainClouds?.length) return [];
+  const strokes = new Map(project.strokes.map((s) => [s.id, s]));
+  const length = project.bars * 4 * (project.pingpong ? 2 : 1);
+  const notes = [];
+  const solo = project.layers.some((l) => l.solo);
+  for (const drop of rainPattern(project)) {
+    if (!drop.hit || (!project.loop && drop.contact >= length)) continue;
+    const stroke = strokes.get(drop.hit.strokeId),
+      layer = project.layers.find((l) => l.id === stroke.layerId);
+    if (
+      !layer ||
+      layer.mute ||
+      layer.volume === 0 ||
+      stroke.sound.volume === 0 ||
+      (solo && !layer.solo)
+    )
+      continue;
+    const shift = (project.pitchShift || 0) + (stroke.pitchShift || 0);
+    // Rain notes inherit the first contacted mark's pitch, instrument, and layer
+    // settings. Droplet size adjusts velocity while muted or non-solo layers stay
+    // silent.
+    const pitch = clamp(
+      pitchAt(drop.y, project, !!stroke.smudged) +
+        (stroke.brush === "Bass" ? -24 : 0) +
+        shift,
+      0,
+      127,
+    );
+    notes.push({
+      id: `rain:${drop.id}`,
+      layerId: layer.id,
+      start: drop.start,
+      duration: Math.min(
+        stroke.brush === "Drums" ? 0.08 : 0.2,
+        length - drop.start,
+      ),
+      extent: 0,
+      pitch,
+      curve: [{ beat: 0, pitch }],
+      pitchShift: shift,
+      brush: stroke.brush,
+      color: stroke.color,
+      sound: stroke.sound,
+      velocity: clamp(
+        (stroke.sound.volume ?? 0.65) *
+          (0.3 + stroke.size / 28) *
+          (0.35 + drop.hit.pressure) *
+          layer.volume *
+          drop.size,
+        0.008,
+        0.85,
+      ),
+      brightness: clamp(stroke.opacity * (stroke.sound.hardness ?? 0.75)),
+      seed: hash(drop.id),
+      rain: { cloudId: drop.cloudId, x: drop.x, y: drop.y },
+    });
+  }
+  return notes;
+}
 export function timeline(project) {
-  const notes = compileNotes(project);
-  if (!project.pingpong) return notes;
+  const notes = compileNotes(project, false);
+  if (!project.pingpong)
+    return arrangeNotes([...notes, ...compileRainNotes(project)]);
   const beats = project.bars * 4;
   const result = [];
   for (const n of notes) {
+    // Ping-pong playback reverses the pitch curve and onset positions. Boundary notes
+    // are handled specially so the turnaround does not strike the same point twice.
     const extent = Math.min(n.extent, n.duration);
     const reverseCurve = [...n.curve]
       .reverse()
@@ -177,7 +262,7 @@ export function timeline(project) {
       curve: reverseCurve,
     });
   }
-  return result.sort((a, b) => a.start - b.start);
+  return arrangeNotes([...result, ...compileRainNotes(project)]);
 }
 function hash(s) {
   let h = 2166136261;
@@ -191,6 +276,8 @@ function rng(seed) {
     return seed / 4294967296;
   };
 }
+// MIDI pitches become oscillator frequencies. The shared audio graph provides filtering,
+// compression, master gain, delay, reverb, and an analyser for metering.
 const frequency = (m) => 440 * 2 ** ((m - 69) / 12);
 export function createGraph(context, p) {
   const input = context.createGain(),
@@ -236,6 +323,8 @@ export function createGraph(context, p) {
   }
   convolver.buffer = impulse;
   reverb.gain.value = p.reverb * 0.45;
+  // Effects reconnect through the compressor, and graph parameters can change smoothly
+  // during playback. Explicit disconnection releases every node when a graph is retired.
   filter.connect(convolver);
   convolver.connect(reverb);
   reverb.connect(compressor);
@@ -281,6 +370,8 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
   if (drum)
     duration =
       sound.drum === "open hi-hat" ? 0.42 : sound.drum === "kick" ? 0.24 : 0.15;
+  // Per-note gain envelopes apply attack, sustain or pluck decay, and release. The brush
+  // and drum type choose the oscillator or seeded-noise source.
   const release = drum ? 0.045 : clamp(sound.release ?? 0.18, 0.015, 2);
   const gain = context.createGain(),
     filter = context.createBiquadFilter();
@@ -326,6 +417,8 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
     b.getChannelData(0).set(data);
     source.buffer = b;
     filter.type = sound.drum === "snare" ? "bandpass" : "highpass";
+    // Noise is filtered differently for snare and hi-hat, while pitched brushes select a
+    // waveform. Kick drums use a falling oscillator frequency for their transient.
     filter.frequency.value = Math.min(
       context.sampleRate / 2,
       ((sound.drum === "snare" ? 1500 : 5200) +
@@ -370,6 +463,9 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
       source.frequency.setValueAtTime(frequency(initial), start);
       for (const p of curve)
         if (p.beat > offset && p.beat <= n.duration)
+          // Frequency automation follows the remaining pitch curve after a seek.
+          // Finished live voices disconnect, and stopped voices fade briefly to prevent
+          // clicks.
           source.frequency.linearRampToValueAtTime(
             frequency(p.pitch),
             start + (p.beat - offset) * secondsPerBeat,
@@ -408,6 +504,8 @@ export function metronomeNote(context, graph, time, accent, volume) {
       brush: "Pencil",
       brightness: 1,
       velocity: volume,
+      // Metronome notes share the synth envelope path. Transport state tracks the audio-
+      // clock origin, scheduled note keys, active voices, and composition changes.
       sound: { release: 0.02 },
     },
     time,
@@ -431,9 +529,11 @@ let context,
   lastComposition = "";
 // Presentation-only changes must not restart sounding voices.
 function compositionKey() {
-  const p = state.project;
+  const p = playbackProject();
   return JSON.stringify({
     strokes: p.strokes,
+    rainClouds: p.rainClouds,
+    loop: p.loop,
     layers: p.layers.map(({ id, mute, solo, volume }) => ({
       id,
       mute,
@@ -451,6 +551,8 @@ function compositionKey() {
   });
 }
 export function audioContext() {
+  // The transport derives beats from AudioContext time rather than animation frames.
+  // Rebasing recompiles edited music and resets scheduling at the current beat.
   return context;
 }
 export function transportBeat() {
@@ -472,7 +574,7 @@ function rebase() {
   originBeat = beat;
   originTime = context?.currentTime || 0;
   pausedBeat = beat;
-  notes = timeline(state.project);
+  notes = timeline(playbackProject());
   lastComposition = compositionKey();
   silence();
   generation++;
@@ -496,8 +598,10 @@ export async function play() {
   if (pausedBeat >= length() && !state.project.loop) pausedBeat = 0;
   tempo = state.project.bpm;
   originBeat = pausedBeat;
+  // Play starts the scheduler from the paused beat; Pause preserves that beat and
+  // silences voices. Stop also resets the playhead to the beginning.
   originTime = context.currentTime + 0.035;
-  notes = timeline(state.project);
+  notes = timeline(playbackProject());
   lastComposition = compositionKey();
   state.playing = true;
   scheduled.clear();
@@ -534,13 +638,15 @@ export function seek(position) {
   silence();
   generation++;
   if (state.playing) {
-    notes = timeline(state.project);
+    notes = timeline(playbackProject());
     lastComposition = compositionKey();
     tick(true);
   }
   emit("seek");
 }
 export function seekStart() {
+  // The scheduler looks ahead using audio time and stops non-looping playback at its
+  // end. Generation and cycle keys prevent notes from being scheduled twice.
   seek(0);
 }
 function tick(resume = false) {
@@ -586,6 +692,8 @@ function tick(resume = false) {
     }
   }
   if (state.project.metronome) {
+    // Metronome hits use their own scheduling keys, and the scheduled-key cache is
+    // bounded. Instrument preview creates a short voice from the current brush settings.
     for (let b = Math.ceil(beat); b <= horizon; b++) {
       const key = `${generation}:metro:${b}`;
       if (!scheduled.has(key)) {
@@ -631,6 +739,8 @@ export async function previewSound() {
       graph,
       {
         duration: 1,
+        // Preview notes use the same voice implementation as composition playback. State
+        // subscriptions recompile relevant edits, including audible Echo previews.
         pitch: brush === "Bass" ? 36 : 60,
         curve: [{ beat: 0, pitch: brush === "Bass" ? 36 : 60 }],
         brush,
@@ -648,10 +758,19 @@ export function initTransport() {
   subscribe((type) => {
     if (type === "load") {
       stop();
-      notes = timeline(state.project);
+      notes = timeline(playbackProject());
       lastComposition = compositionKey();
       if (graph) graph.update(state.project);
-    } else if (type === "edit" || type === "music") {
+    } else if (
+      [
+        "edit",
+        "music",
+        "change",
+        "musical-preview",
+        "tool",
+        "selection",
+      ].includes(type)
+    ) {
       if (graph) graph.update(state.project);
       if (state.playing && compositionKey() !== lastComposition) rebase();
     }
@@ -667,6 +786,9 @@ export function initTransport() {
   const samples = new Float32Array(256);
   function frame() {
     if (graph) {
+      // Animation frames update the meter and playhead from the audio clock. Ping-pong
+      // position folds the return pass back across the canvas while sound scheduling
+      // stays continuous.
       graph.analyser.getFloatTimeDomainData(samples);
       const rms = Math.sqrt(
         samples.reduce((n, s) => n + s * s, 0) / samples.length,

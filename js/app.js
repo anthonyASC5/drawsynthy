@@ -1,3 +1,5 @@
+// The interface connects project state, drawing, and audio to the existing Windows-style
+// controls. Event handlers delegate edits to shared history helpers.
 import {
   state,
   TOOLS,
@@ -20,6 +22,20 @@ import {
   listProjects,
   removeProject,
   validateProject,
+  MUSICAL_TOOLS,
+  symmetry,
+  echo,
+  rainDefaults,
+  selectedMarks,
+  applyMusicalTool,
+  addRain,
+  removeRain,
+  startSymmetry,
+  updateSymmetry,
+  symmetrySourceCount,
+  copySelection,
+  pasteSelection,
+  canPasteSelection,
 } from "./state.js";
 import {
   initSeeking,
@@ -32,6 +48,13 @@ import {
   duplicateSelection,
   cancelAction,
   placeCentered,
+  canvasPoint,
+  // Export actions live with canvas rendering, so the interface uses the same drawing
+  // and audio data for downloads as it does for playback.
+  exportJSON,
+  exportPNG,
+  exportWAV,
+  exportMIDI,
 } from "./canvas.js";
 import {
   initTransport,
@@ -41,7 +64,6 @@ import {
   seekStart,
   previewSound,
 } from "./audio.js";
-import { exportJSON, exportPNG, exportWAV, exportMIDI } from "./export.js";
 
 const $ = (s) => document.querySelector(s),
   el = (tag, attrs = {}, text) => {
@@ -74,6 +96,13 @@ const paths = [
   "M5 12V7c0-3 3-3 3 0v5-8c0-3 3-3 3 0v8-6c0-3 3-3 3 0v6-3c0-3 3-3 3 0v8c0 6-9 7-12 2l-3-5c-2-4 2-5 4-2",
 ];
 const hints = {
+  // Each tool has a short interaction hint. Guarded button handlers report failures in
+  // the status bar and a dialog instead of leaving an unhandled rejection.
+  "Musical Symmetry":
+    "Mirrors are created automatically. Move the axes to adjust your harmony.",
+  "Echo Paint":
+    "Select marks to repeat them with delay, fade, and pitch changes.",
+  "Rhythm Rain": "Place clouds above your marks. Press Play to hear the rain.",
   Pencil: "Small lines, little plucks. Try a constellation of notes.",
   Ink: "Draw a melody. Up is higher, right is later.",
   Watercolor: "Wash in a soft, slow pad. Overlap marks for a chord.",
@@ -114,6 +143,8 @@ function button(parent, text, fn, attrs = {}) {
   parent.append(b);
   return b;
 }
+// Reusable checkbox, select, and range builders give Properties controls consistent
+// labels and callbacks without repeating their DOM setup.
 function checkbox(parent, text, value, fn) {
   const label = el("label", { class: "check" }),
     input = el("input", { type: "checkbox" });
@@ -159,6 +190,8 @@ function range(parent, text, value, min, max, step, fn) {
       "aria-label": text,
     });
   name.htmlFor = id;
+  // A range control keeps its number field and slider in sync, clamps values to the
+  // allowed interval, and forwards only finite input to its owner.
   top.append(name, number);
   label.append(top, slider);
   parent.append(label);
@@ -189,7 +222,9 @@ function paperSet(key, value) {
   resetPaper();
 }
 function selectTool(tool) {
+  const continuing = state.tool === tool && symmetrySourceCount() > 0;
   state.tool = tool;
+  if (tool === "Musical Symmetry" && !continuing) startSymmetry();
   const preset = {
     Pencil: [3, 0.008, 0.12],
     Ink: [9, 0.025, 0.18],
@@ -200,6 +235,8 @@ function selectTool(tool) {
   };
   if (preset[tool]) {
     [state.brush.size, state.brush.attack, state.brush.release] = preset[tool];
+    // Tool changes apply brush presets, open the relevant Properties section, and update
+    // toolbar labels and icons without modifying existing marks.
     if (tool === "Watercolor") state.brush.opacity = 0.4;
     else state.brush.opacity = 0.9;
   }
@@ -231,13 +268,232 @@ function renderTools() {
       "data-tool": name,
       "aria-pressed": name === state.tool,
     });
-    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true"><path d="${paths[i]}"/></svg><span>${label}</span>`;
+    const icons = {
+      "Musical Symmetry":
+        '<path d="M12 2v21M3 5h5v15H3l4-7ZM21 5h-5v15h5l-4-7Z"/>',
+      "Echo Paint":
+        '<path d="M3 5h18"/><path opacity=".6" d="M5 12h16"/><path opacity=".3" d="M7 19h14"/>',
+      "Rhythm Rain":
+        '<path d="M6 15C0 15 0 7 6 7C6 0 17 0 18 7C25 5 26 15 20 15ZM7 18l-2 4m9-4-2 4m9-4-2 4"/>',
+    };
+    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[i]}"/>`}</svg><span>${label}</span>`;
   });
+}
+function musicalSettings(p) {
+  if (state.tool === "Rhythm Rain") {
+    const clouds = state.project.rainClouds || [];
+    // Rain Properties targets the selected cloud, or the defaults for the next cloud.
+    // Placement is limited to four clouds and each cloud can be selected by name.
+    const cloud = clouds.find((c) => c.id === state.selectedCloud);
+    p.append(
+      el(
+        "p",
+        {},
+        "Click above the canvas to place a cloud. Drag it sideways. Rain falls while playing.",
+      ),
+    );
+    p.append(el("small", {}, `${clouds.length} of 4 clouds placed`));
+    const add = button(p, "Place rain centered", () => addRain());
+    add.disabled = clouds.length >= 4;
+    if (clouds.length)
+      select(
+        p,
+        "Selected cloud",
+        [
+          ["", "Choose a cloud"],
+          ...clouds.map((c, i) => [c.id, `Cloud ${i + 1}`]),
+        ],
+        cloud?.id || "",
+        (v) => {
+          state.selectedCloud = v || null;
+          emit("selection");
+        },
+      );
+    const settings = cloud || rainDefaults;
+    const set = (key, value) => {
+      const current = state.project.rainClouds.find(
+        (c) => c.id === state.selectedCloud,
+      );
+      if (current) change(() => (current[key] = value));
+      else rainDefaults[key] = value;
+    };
+    const control = (key, label, min, max, step, scale = 1) => {
+      let before = null;
+      const slider = range(
+        p,
+        label,
+        Math.round(settings[key] * scale * 100) / 100,
+        min,
+        max,
+        step,
+        (n) => {
+          const value = key === "amount" ? Math.round(n) : n / scale;
+          // Slider drags update the current cloud during the gesture and commit one
+          // history snapshot when it finishes, allowing a single Undo to restore the
+          // settings.
+          const current = state.project.rainClouds.find(
+            (c) => c.id === state.selectedCloud,
+          );
+          if (before !== null && current) {
+            current[key] = value;
+            emit("rain-preview");
+          } else set(key, value);
+        },
+      );
+      slider.addEventListener("pointerdown", () => {
+        if (cloud) before = snapshot();
+      });
+      const finish = () => {
+        if (before === null) return;
+        const previous = before;
+        before = null;
+        commit(previous);
+      };
+      slider.addEventListener("pointerup", finish);
+      slider.addEventListener("lostpointercapture", finish);
+      slider.addEventListener("pointercancel", finish);
+    };
+    if (!cloud)
+      p.append(
+        el("small", {}, "These settings will be used for your next cloud."),
+      );
+    if (cloud) control("x", "Cloud position (%)", 0, 100, 1, 100);
+    control("amount", "Rain Amount", 1, 8, 1);
+    control("speed", "Fall Speed", 0.5, 4, 0.1);
+    control("spread", "Spread (%)", 0, 100, 1, 100);
+    select(
+      p,
+      "Rhythm division",
+      [4, 8, 16, 32].map((n) => [String(n), `1/${n} note`]),
+      String(settings.division),
+      (v) => set("division", +v),
+    );
+    const remove = button(p, "Remove Rain", removeRain);
+    remove.disabled = !cloud;
+    return;
+  }
+  const immediate = state.tool === "Musical Symmetry";
+  const count = immediate ? symmetrySourceCount() : selectedMarks().length;
+  // Symmetry edits playable copies immediately; Echo displays and plays temporary copies
+  // until Apply. The explanatory text distinguishes these two workflows.
+  p.append(
+    el(
+      "p",
+      {},
+      immediate
+        ? count
+          ? "Mirrors are already on the canvas and play with your drawing. Adjust them below."
+          : "Draw some marks, then press Musical Symmetry to mirror them automatically."
+        : count
+          ? `${count} mark${count === 1 ? "" : "s"} selected. Press Play to hear the echoes. Apply keeps them in your drawing.`
+          : "Select one or more marks before applying this tool.",
+    ),
+  );
+  if (!immediate) button(p, "Select marks", () => selectTool("Select"));
+  const options = state.tool === "Musical Symmetry" ? symmetry : echo;
+  const set = (key, value) => {
+    options[key] = value;
+    if (immediate) updateSymmetry();
+    emit("musical-preview");
+  };
+  if (state.tool === "Musical Symmetry") {
+    select(
+      p,
+      "Mirror mode",
+      ["Vertical", "Horizontal", "Both"],
+      symmetry.mode,
+      (v) => {
+        set("mode", v);
+        toolSettings();
+      },
+    );
+    if (symmetry.mode !== "Horizontal")
+      range(
+        p,
+        "Horizontal axis (%)",
+        Math.round(symmetry.y * 100),
+        0,
+        100,
+        1,
+        (n) => set("y", n / 100),
+      );
+    if (symmetry.mode !== "Vertical")
+      // Symmetry axes can be positioned numerically or by dragging. Destination and Keep
+      // Original control which editable strokes survive the transformation.
+      range(
+        p,
+        "Vertical axis (%)",
+        Math.round(symmetry.x * 100),
+        0,
+        100,
+        1,
+        (n) => set("x", n / 100),
+      );
+    p.append(
+      el(
+        "small",
+        {},
+        "Drag on the canvas to move the axes. Vertical changes pitch; Horizontal reverses timing. Both adds three reflections.",
+      ),
+    );
+    checkbox(p, "Keep Original", symmetry.keep, (v) => set("keep", v));
+    select(
+      p,
+      "Destination",
+      ["Current Layer", "Harmony Layer"],
+      symmetry.destination,
+      (v) => set("destination", v),
+    );
+  } else {
+    range(p, "Copies", echo.copies, 1, 8, 1, (n) => set("copies", n));
+    select(
+      p,
+      "Delay",
+      [
+        ["0.0625", "1/16 beat"],
+        ["0.125", "1/8 beat"],
+        ["0.25", "1/4 beat"],
+        ["0.5", "1/2 beat"],
+      ],
+      String(echo.delay),
+      (v) => set("delay", +v),
+    );
+    range(p, "Fade (%)", echo.fade * 100, 0, 100, 1, (n) =>
+      set("fade", n / 100),
+    );
+    range(p, "Pitch Change (semitones)", echo.pitch, -12, 12, 1, (n) =>
+      set("pitch", n),
+    );
+    checkbox(p, "Separate Layer", echo.separate, (v) => set("separate", v));
+    // Echo settings accumulate delay, pitch shift, and fade for successive copies. Apply
+    // commits them; Done leaves symmetry copies available to normal selection.
+    p.append(
+      el(
+        "small",
+        {},
+        "Fade and pitch change accumulate with each copy. Echoes wrap at the loop edge.",
+      ),
+    );
+  }
+  if (immediate) {
+    button(p, "Done", () => selectTool("Select"));
+    return;
+  }
+  const apply = button(
+    p,
+    state.tool === "Musical Symmetry" ? "Apply Symmetry" : "Apply Echoes",
+    applyMusicalTool,
+  );
+  apply.disabled = !count;
 }
 function toolSettings() {
   const p = $("#tool-settings");
   p.replaceChildren();
   $("#tool-name").textContent = toolLabel(state.tool);
+  if (MUSICAL_TOOLS.includes(state.tool)) {
+    musicalSettings(p);
+    return;
+  }
   const brush = (key, label, min, max, step = 1, scale = 1) =>
     range(p, label, state.brush[key] * scale, min, max, step, (n) => {
       state.brush[key] = n / scale;
@@ -251,8 +507,12 @@ function toolSettings() {
         `${state.selected.size} mark${state.selected.size === 1 ? "" : "s"} selected`,
       ),
     );
+    button(p, "Copy", actions.copySelection);
+    button(p, "Paste", () => actions.pasteSelection());
     button(p, "Duplicate", duplicateSelection);
     button(p, "Delete", deleteSelection);
+    // Selection controls can move marks between layers. Pan, Eraser, and Smudge get
+    // their own Properties instead of irrelevant sound or brush controls.
     select(
       p,
       "Move to layer",
@@ -293,6 +553,8 @@ function toolSettings() {
   }
   brush("opacity", "Opacity", 5, 100, 1, 100);
   if (state.tool === "Drums")
+    // Drum sounds and shape presets use the same stroke data as freehand drawing.
+    // Additional envelope controls configure the instrument carried by new marks.
     select(
       p,
       "Drum sound",
@@ -337,6 +599,8 @@ function toolSettings() {
       step,
       (n) => (state.brush[key] = n / scale),
     );
+  // The pitch knob transposes the composition in semitones. Its pointer, output, reset
+  // behavior, and history snapshot stay tied to the project pitch value.
   button(extra, "♫ Preview sound", previewSound);
 }
 function pitchControl(parent) {
@@ -382,6 +646,8 @@ function pitchControl(parent) {
     }
   });
   knob.addEventListener("pointerup", () => {
+    // Finishing a knob drag commits one edit; cancellation restores its starting value.
+    // Keyboard controls offer semitone steps, octave steps, and range endpoints.
     if (drag) commit(drag.before);
     drag = null;
   });
@@ -427,6 +693,8 @@ function syncPitch() {
   knob.style.setProperty("--pitch-angle", `${(value / 24) * 135}deg`);
   $("#pitch-value").textContent = label;
 }
+// Sound Properties exposes scale, pitch range, effects, and metronome settings. These
+// project edits drive the shared live and export audio configuration.
 function soundSettings() {
   const p = $("#sound-settings");
   p.replaceChildren();
@@ -471,6 +739,8 @@ function paperSettings() {
   select(p, "Paper type", PAPER, state.project.paper.type, (v) =>
     paperSet("type", v),
   );
+  // Paper controls only change presentation: background, grid opacity, division, and
+  // labels. Layer rows separately expose visibility, selection, mute, and solo.
   const row = el("label", { class: "setting-row" }, "Background color"),
     color = el("input", {
       type: "color",
@@ -516,6 +786,8 @@ function renderLayers() {
       {
         class: "layer-toggle",
         title: layer.visible ? "Hide layer" : "Show layer",
+        // Visibility affects the artwork display, while mute and solo affect sound.
+        // Selecting a layer changes the destination for newly painted marks.
         "aria-label": `Toggle ${layer.name} visibility`,
         "aria-pressed": !layer.visible,
       },
@@ -561,6 +833,8 @@ function layerDialog() {
     );
     const actions = el("div", { class: "dialog-actions" });
     const move = (d) => {
+      // Layer reordering and duplication run inside project history. Duplicates receive
+      // new IDs, and deleting a layer also removes its owned strokes.
       change(() => {
         const i = state.project.layers.indexOf(layer),
           target = clamp(i + d, 0, state.project.layers.length - 1);
@@ -606,6 +880,8 @@ function layerDialog() {
         );
         state.layer = state.project.layers[0].id;
       });
+      // Zoom changes only the viewport. The central sync routine then refreshes controls
+      // from state and opens musical-tool Properties when the tool changes.
       closeDialog();
     });
     body.append(actions);
@@ -619,6 +895,16 @@ function setZoom(n) {
 }
 function sync(type) {
   const p = state.project;
+  if (
+    state.selectedCloud &&
+    !p.rainClouds?.some((c) => c.id === state.selectedCloud)
+  )
+    state.selectedCloud = null;
+  if (type === "tool" && MUSICAL_TOOLS.includes(state.tool)) {
+    $("#inspector").hidden = false;
+    $("#settings-mobile").setAttribute("aria-expanded", "true");
+    $("#tool-settings").parentElement.open = true;
+  }
   syncPitch();
   if (!p.layers.some((l) => l.id === state.layer)) state.layer = p.layers[0].id;
   $("#window-title").textContent = `Draw Synth — ${p.name}`;
@@ -641,6 +927,8 @@ function sync(type) {
   $("#status-tool").textContent = "✎ " + state.tool;
   $("#status-size").textContent = state.brush.size + " px";
   $("#status-zoom").textContent = Math.round(state.zoom * 100) + "%";
+  // State synchronization updates toolbar selection, swatches, brush preview, and
+  // Undo/Redo availability so separate controls reflect the same project.
   $("#zoom-reset").textContent = Math.round(state.zoom * 100) + "%";
   $("#drawing-tip").textContent = hints[state.tool];
   $("#brush-preview-label").textContent = state.brush.size + " px";
@@ -682,6 +970,14 @@ function sync(type) {
     $("#beat-position").textContent = "01";
   }
   if (["tool", "selection", "load", "init"].includes(type)) toolSettings();
+  // Properties rebuild only when necessary, avoiding replacement of a focused input
+  // during editing. Project edits also schedule local autosave.
+  if (
+    type === "edit" &&
+    MUSICAL_TOOLS.includes(state.tool) &&
+    !document.activeElement?.closest("#tool-settings")
+  )
+    toolSettings();
   if (["edit", "layer", "load", "init"].includes(type)) renderLayers();
   if (["load", "init"].includes(type)) {
     soundSettings();
@@ -721,6 +1017,9 @@ function scheduleSave() {
           message(
             "Auto-save unavailable. Use Export → Project to keep a file.",
           );
+        // Autosave is debounced and serialized; project switching waits for the previous
+        // save. Naming and duplicate checks prevent accidental overwrite in the saved-
+        // project list.
         lastSaveError = true;
         console.warn(error);
       }),
@@ -766,6 +1065,8 @@ function renameDialog() {
     body.append(actions);
   });
 }
+// The Open dialog lists local projects by recency and offers import and deletion.
+// Loading a drawing goes through the shared project-switching path.
 async function openDialog() {
   const projects = await listProjects();
   showDialog("Open a drawing", (body) => {
@@ -811,6 +1112,8 @@ async function openDialog() {
 function exportDialog() {
   showDialog("Export your drawing", (body) => {
     body.append(el("h2", {}, "Let it out into the world."));
+    // Export choices dispatch project, PNG, MIDI, or WAV generation. WAV rendering
+    // reports progress while the offline audio engine prepares the download.
     body.append(el("p", {}, "One drawing. A few ways to share it."));
     const options = el("div", { class: "export-options" });
     const add = (title, desc, fn) => {
@@ -856,6 +1159,9 @@ function exportDialog() {
         checkbox(body, "Include grid", true, (v) => (grid = v));
         checkbox(body, "Include paper texture", true, (v) => (texture = v));
         button(body, "Save PNG", () => {
+          // PNG can omit paper details; MIDI describes notes rather than brush timbre.
+          // The image-import dialog initializes tracing options and its preview
+          // controls.
           exportPNG(grid, texture);
           closeDialog();
         });
@@ -900,6 +1206,8 @@ function imageDialog() {
       id: "image-file",
     });
     body.append(input);
+    // Image import keeps the chosen filename, raster preview, and tracing settings
+    // together. The preview canvas uses the drawing area's aspect ratio.
     const filename = el(
       "span",
       { class: "image-filename" },
@@ -945,6 +1253,8 @@ function imageDialog() {
       controls,
       "Preview",
       async () => {
+        // A revision counter discards stale image-processing results when options
+        // change. Buttons stay disabled until usable contours are available for import.
         const current = ++revision;
         contours = null;
         importButton.disabled = true;
@@ -988,6 +1298,8 @@ function imageDialog() {
       },
       { disabled: "" },
     );
+    // Import checks layer, stroke, and point limits before adding any artwork. All
+    // contours are inserted as editable Ink marks in one history transaction.
     const importButton = button(
       controls,
       "Import",
@@ -1033,6 +1345,9 @@ function imageDialog() {
         setZoom(1);
         selectTool("Select");
         closeDialog();
+        // After import, the new marks are selected for movement or recoloring.
+        // Unsupported image types and processing failures produce useful status
+        // messages.
         message(
           "Image imported. Select to move or resize; choose a color to recolor.",
         );
@@ -1075,6 +1390,8 @@ function helpDialog() {
         "Draw on the paper, then press Play. Left to right is time; bottom to top is pitch. Each brush is a different instrument. Thicker marks are louder, opaque marks are brighter, and longer marks last longer.",
       ),
     );
+    // Help explains drawing and playback controls. The shared action table supplies the
+    // same operations to menus, toolbar buttons, and keyboard shortcuts.
     body.append(
       el(
         "p",
@@ -1108,7 +1425,25 @@ function helpDialog() {
     button(body, "Let’s draw", closeDialog);
   });
 }
+// Clipboard commands share status feedback across shortcuts, Properties, and menus.
+// Copy preserves the selection; Paste selects the new editable marks on the active layer.
 const actions = {
+  copySelection: () => {
+    const count = copySelection();
+    message(
+      count
+        ? `${count} mark${count === 1 ? "" : "s"} copied.`
+        : "Select marks to copy first.",
+    );
+  },
+  pasteSelection: (at = null) => {
+    const count = pasteSelection(at);
+    message(
+      count
+        ? `${count} mark${count === 1 ? "" : "s"} pasted on the current layer.`
+        : "Copy some marks first.",
+    );
+  },
   new: newProject,
   open: openDialog,
   save: renameDialog,
@@ -1120,6 +1455,8 @@ const actions = {
   loop: () => projectSet("loop", !state.project.loop),
   export: exportDialog,
   import: () => $("#file-input").click(),
+  // Project duplication gets a new identity; deletion coordinates pending saves.
+  // Selection and zoom actions operate on shared state rather than separate UI copies.
   duplicate: async () => {
     const p = structuredClone(state.project);
     p.id = uid();
@@ -1158,6 +1495,8 @@ const actions = {
   help: helpDialog,
   about: () =>
     showDialog("About Draw Synth", (b) => {
+      // The menu definitions group File, Edit, View, Sound, and Help commands with their
+      // shortcut labels, keeping the Windows-style menu layout declarative.
       b.append(
         el("h2", {}, "Draw Synth 1.0"),
         el(
@@ -1185,6 +1524,8 @@ function menus() {
       ["Undo", "undo", "⌘ Z"],
       ["Redo", "redo", "⇧ ⌘ Z"],
       ["Select all", "selectAll", "⌘ A"],
+      ["Copy", "copySelection", "Ctrl/⌘ C"],
+      ["Paste", "pasteSelection", "Ctrl/⌘ V"],
       ["Duplicate selection", "duplicateSelection", ""],
       ["Delete selection", "deleteSelection", "⌫"],
       ["Clear drawing", "clear", ""],
@@ -1202,6 +1543,8 @@ function menus() {
       ["Loop on / off", "loop", ""],
       ["Preview brush", "preview", ""],
     ],
+    // Menus close each other when opened and dispatch the same action handlers as the
+    // toolbar. Panel dragging stores pointer offsets to avoid jumping on pickup.
     Help: [
       ["How to play", "help", ""],
       ["Load demo drawing", "demo", ""],
@@ -1239,6 +1582,70 @@ function closeMenus() {
     .querySelectorAll(".menu>button")
     .forEach((e) => e.setAttribute("aria-expanded", "false"));
 }
+// The canvas menu uses the same commands as keyboard shortcuts and Properties.
+// Keep the right-click position for Paste without moving or clearing the selection.
+function selectionMenu() {
+  const canvas = $("#drawing");
+  const menu = el("div", {
+    id: "selection-menu",
+    class: "menu-list canvas-menu",
+    role: "menu",
+    "aria-label": "Selection actions",
+    hidden: "",
+  });
+  let at = null;
+  const run = (fn) => () => {
+    closeMenus();
+    fn();
+    canvas.focus({ preventScroll: true });
+  };
+  const copy = button(menu, "Copy", run(actions.copySelection), {
+    role: "menuitem",
+  });
+  const paste = button(
+    menu,
+    "Paste",
+    run(() => actions.pasteSelection(at)),
+    { role: "menuitem" },
+  );
+  document.body.append(menu);
+  canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    closeMenus();
+    at = canvasPoint(e);
+    copy.disabled = !state.project.strokes.some((s) =>
+      state.selected.has(s.id),
+    );
+    paste.disabled = !canPasteSelection();
+    menu.hidden = false;
+    menu.style.left = `${clamp(e.clientX, 0, innerWidth - menu.offsetWidth)}px`;
+    menu.style.top = `${clamp(e.clientY, 0, innerHeight - menu.offsetHeight)}px`;
+    (copy.disabled ? paste : copy).focus();
+  });
+  // Arrow keys move between available commands; Escape restores canvas focus.
+  menu.addEventListener("keydown", (e) => {
+    if (["Enter", " "].includes(e.key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      document.activeElement?.click();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenus();
+      canvas.focus();
+    }
+    if (["ArrowDown", "ArrowUp"].includes(e.key)) {
+      e.preventDefault();
+      const buttons = [...menu.querySelectorAll("button:not(:disabled)")];
+      const next =
+        buttons.indexOf(document.activeElement) +
+        (e.key === "ArrowDown" ? 1 : -1);
+      buttons[(next + buttons.length) % buttons.length]?.focus();
+    }
+  });
+  window.addEventListener("resize", closeMenus);
+}
 function draggable() {
   document.querySelectorAll("[data-drag]").forEach((handle) => {
     let drag;
@@ -1247,6 +1654,9 @@ function draggable() {
       const panel = $("#" + handle.dataset.drag),
         r = panel.getBoundingClientRect();
       drag = { panel, dx: e.clientX - r.left, dy: e.clientY - r.top };
+      // Dragging a panel switches it to a bounded floating position. Double-clicking its
+      // title restores docking; full-canvas mode independently controls surrounding
+      // chrome.
       panel.style.width = r.width + "px";
       panel.style.height = r.height + "px";
       panel.style.position = "fixed";
@@ -1292,6 +1702,8 @@ function bind() {
   $("#toggle-tools").onclick = () => togglePanel("palette", "toggle-tools");
   $("#close-tools").onclick = $("#toggle-tools").onclick;
   $("#full-canvas").onclick = () => fullCanvas(true);
+  // Binding connects playback, dialogs, panel toggles, and fullscreen controls. Color
+  // buttons reuse the same recoloring path as the custom-color input.
   $("#exit-full-canvas").onclick = () => fullCanvas(false);
   $("#canvas-play").onclick = guard(() => {
     if (!state.playing) return play();
@@ -1336,6 +1748,8 @@ function bind() {
       {
         class: "swatch",
         "aria-label": `Paint ${["charcoal", "gray", "white", "coral", "orange", "yellow", "green", "teal", "blue", "violet", "pink", "brown"][i]}`,
+        // Palette changes update the selected marks or current paint color. Tempo, loop
+        // length, ping-pong, metronome, and master-volume inputs write project settings.
         "aria-pressed": state.color === color,
       },
     );
@@ -1376,6 +1790,8 @@ function bind() {
         "bpm",
         clamp(Math.round(60000 / ((t - taps[0]) / (taps.length - 1))), 40, 240),
       );
+    // Tap tempo derives BPM from recent taps. Layer creation and project import enforce
+    // limits before the keyboard handler routes global application shortcuts.
     message(
       taps.length === 1
         ? "Tap a few more times…"
@@ -1421,15 +1837,25 @@ function bind() {
         cancelAction();
         if ($("#dialog").open) closeDialog();
         else if (document.body.classList.contains("full-canvas"))
+          // Shortcuts are ignored while typing in inputs or dialogs. Space controls
+          // playback, Enter seeks, and editing shortcuts reuse the same undoable actions
+          // as buttons.
           fullCanvas(false);
         return;
       }
-      if (e.target.matches("input,select,textarea") || $("#dialog").open)
+      if (
+        e.target.closest(
+          "input,select,textarea,[contenteditable]:not([contenteditable=false])",
+        ) ||
+        $("#dialog").open
+      )
         return;
       const cmd = e.ctrlKey || e.metaKey,
         key = e.key.toLowerCase();
-      if (cmd && ["z", "s", "a", "n", "d"].includes(key)) {
+      if (cmd && ["z", "s", "a", "n", "d", "c", "v"].includes(key)) {
         e.preventDefault();
+        if (key === "c") actions.copySelection();
+        if (key === "v") actions.pasteSelection();
         if (key === "z") e.shiftKey ? redo() : undo();
         if (key === "s") renameDialog();
         if (key === "a") actions.selectAll();
@@ -1437,6 +1863,8 @@ function bind() {
         if (key === "d") duplicateSelection();
         return;
       }
+      // Unmodified keys remain available for playback and drawing tools after
+      // clipboard shortcuts have been handled outside text-editing controls.
       if (e.code === "Space") {
         e.preventDefault();
         await play();
@@ -1466,12 +1894,15 @@ function bind() {
   });
   draggable();
 }
+// Startup creates controls and installs drawing, seeking, transport, and state listeners
+// before loading a blank project. A small public handle supports browser checks.
 async function init() {
   renderTools();
   menus();
   bind();
   initCanvas();
   initTools();
+  selectionMenu();
   initSeeking();
   initTransport();
   subscribe(sync);

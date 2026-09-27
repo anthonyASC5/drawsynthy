@@ -1,3 +1,6 @@
+// Canvas owns vector rendering, pointer interaction, image tracing, seeking, and file
+// exports. It shares project state and compiled audio rather than duplicating either
+// model.
 import {
   state,
   subscribe,
@@ -11,9 +14,22 @@ import {
   emit,
   change,
   pitchAt,
+  MUSICAL_TOOLS,
+  symmetry,
+  updateSymmetry,
+  generatedMarks,
+  rainPattern,
+  wrap,
+  addRain,
+  removeRain,
 } from "./state.js";
 import {
   seek,
+  transportBeat,
+  timeline,
+  createGraph,
+  soundNote,
+  metronomeNote,
 } from "./audio.js";
 
 // Canvas rendering
@@ -23,11 +39,16 @@ let canvas,
   dirty = true,
   rect = { width: 100, height: 100 },
   preview = null;
+let musicalPreview = [],
+  droplets = [];
 export const view = { left: 37, top: 27, width: 1, height: 1 };
 export function canvasElement() {
   return canvas;
 }
 export function canvasPoint(e) {
+  // Pointer coordinates are converted into normalized project coordinates using the
+  // current pan and zoom. The reverse conversion places selection handles and overlays
+  // on screen.
   const r = canvas.getBoundingClientRect();
   return {
     x: clamp(
@@ -73,6 +94,8 @@ function paper(
   const dark = p.paper.type === "Dark Paper";
   c.fillStyle = dark ? "#202737" : p.paper.color;
   c.fillRect(0, 0, w, h);
+  // Paper texture and grid lines are decorative canvas layers. Their rendering uses
+  // deterministic positions and never creates notes or modifies vector artwork.
   if (texture) {
     c.fillStyle = dark ? "#ffffff09" : "#29251509";
     for (let i = 0; i < Math.min((w * h) / 150, 6000); i++) {
@@ -117,6 +140,9 @@ function paper(
       c.beginPath();
       c.moveTo(x, 0);
       c.lineTo(x, h);
+      // Stroke rendering sets color, opacity, width, and brush-specific appearance.
+      // Watercolor adds a soft shadow; dots and line segments retain their original
+      // geometry.
       c.stroke();
     }
     c.restore();
@@ -162,6 +188,9 @@ function drawStroke(c, s, w, h, pan = state.pan, zoom = state.zoom) {
       0.8,
       size * (0.45 + (points[i].pressure ?? 0.65) * 0.85),
     );
+    // Artwork export renders visible layers into a supplied context. Interactive
+    // rendering additionally caches the paper and draws the ruler, overlays, and
+    // playhead.
     c.beginPath();
     c.moveTo(a.x, a.y);
     c.lineTo(b.x, b.y);
@@ -207,6 +236,8 @@ function render() {
     c.fillStyle = "#67707c";
     c.textAlign = "center";
     const beats = state.project.bars * 4;
+    // Ruler labels map time horizontally and pitch vertically. Visible artwork and
+    // temporary Echo marks are clipped to the drawable region before overlays are added.
     for (let i = 0; i < beats; i++) {
       const x =
         view.left + ((i / beats) * state.zoom + state.pan.x) * view.width;
@@ -237,6 +268,35 @@ function render() {
     if (layer.visible)
       for (const s of state.project.strokes)
         if (s.layerId === layer.id) drawStroke(ctx, s, view.width, view.height);
+  for (const s of musicalPreview)
+    drawStroke(
+      ctx,
+      { ...s, opacity: Math.min(0.35, s.opacity * 0.4) },
+      view.width,
+      view.height,
+    );
+  if (state.tool === "Musical Symmetry") {
+    ctx.save();
+    ctx.strokeStyle = "#794b9a";
+    ctx.setLineDash([5, 4]);
+    const x = (symmetry.x * state.zoom + state.pan.x) * view.width;
+    const y = (symmetry.y * state.zoom + state.pan.y) * view.height;
+    ctx.beginPath();
+    if (symmetry.mode !== "Horizontal") {
+      // Symmetry axes indicate the active reflection directions. During playback, the
+      // renderer highlights stroke intersections and draws a playhead using the
+      // transport's normalized position.
+      ctx.moveTo(0, y);
+      ctx.lineTo(view.width, y);
+    }
+    if (symmetry.mode !== "Vertical") {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, view.height);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  drawRain();
   if (state.playing) {
     const x = (state.position * state.zoom + state.pan.x) * view.width;
     ctx.fillStyle = "#4161c313";
@@ -271,6 +331,9 @@ function render() {
         ctx.fillStyle = s.color;
         ctx.globalAlpha = 0.65;
         ctx.beginPath();
+        // Selection bounds and resize handles are drawn over artwork. Temporary strokes,
+        // shape previews, and box-selection outlines are separate from committed project
+        // vectors.
         ctx.arc(q.x, q.y, Math.max(4, s.size / 2), 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
@@ -316,6 +379,8 @@ function render() {
     } else if (preview.rect) {
       const a = screenPoint(preview.rect.a),
         b = screenPoint(preview.rect.b);
+      // The ruler playhead remains visible when paused. Resizing the canvas updates its
+      // pixel density and viewport dimensions, then invalidates the cached paper.
       ctx.strokeStyle = "#1c48b5";
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
@@ -356,11 +421,20 @@ export function initCanvas() {
     view.width = Math.max(1, rect.width - view.left - 12);
     view.height = Math.max(1, rect.height - view.top - 23);
     resetPaper();
+    renderClouds();
   }).observe(canvas);
   subscribe((t) => {
     dirty = true;
     if (["edit", "load", "view", "change"].includes(t)) paperCache = null;
+    // State events refresh only the relevant cached previews and rain pattern. Animation
+    // continues during playback so falling droplets follow audio-clock time.
+    if (["edit", "load", "tool", "selection", "musical-preview"].includes(t))
+      musicalPreview = generatedMarks();
+    if (["edit", "load", "music"].includes(t))
+      droplets = rainPattern(state.project);
+    renderClouds();
   });
+  initRainClouds();
   function frame() {
     if (dirty || state.playing) {
       render();
@@ -369,6 +443,178 @@ export function initCanvas() {
     requestAnimationFrame(frame);
   }
   frame();
+}
+
+function drawRain() {
+  const beat = Math.max(0, transportBeat());
+  if (!state.playing && !beat) return;
+  const length = state.project.bars * 4 * (state.project.pingpong ? 2 : 1);
+  ctx.save();
+  ctx.fillStyle = "#3c70b5";
+  ctx.strokeStyle = "#3c70b5";
+  for (const drop of droplets) {
+    const age = state.project.loop
+      ? wrap(beat - drop.born, length)
+      : beat - drop.born;
+    if (age < 0 || age > drop.travel + 0.18) continue;
+    const x = (drop.x * state.zoom + state.pan.x) * view.width;
+    const y =
+      ((-0.04 + (drop.y + 0.04) * Math.min(1, age / drop.travel)) * state.zoom +
+        state.pan.y) *
+      view.height;
+    ctx.globalAlpha = 0.7;
+    if (age <= drop.travel) {
+      ctx.beginPath();
+      ctx.ellipse(x, y, 2 * drop.size, 4 * drop.size, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (drop.hit) {
+      const progress = (age - drop.travel) / 0.18;
+      ctx.globalAlpha = 1 - progress;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 3 + progress * 12, 2 + progress * 4, 0, 0, Math.PI * 2);
+      // Rain splashes fade after contact. Cloud controls occupy a separate strip above
+      // the canvas, keeping their placement and selection independent of painted marks.
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function renderClouds() {
+  const strip = document.querySelector("#rain-strip");
+  if (!strip) return;
+  const clouds = state.project.rainClouds || [];
+  strip.hidden = state.tool !== "Rhythm Rain" && !clouds.length;
+  strip.classList.toggle("placing", state.tool === "Rhythm Rain");
+  strip.querySelector("span").textContent = !clouds.length
+    ? "Click here to place rain · up to 4 clouds"
+    : "";
+  for (const b of strip.querySelectorAll("button"))
+    if (!clouds.some((c) => c.id === b.dataset.cloud)) b.remove();
+  clouds.forEach((cloud, i) => {
+    let b = [...strip.querySelectorAll("button")].find(
+      (b) => b.dataset.cloud === cloud.id,
+    );
+    if (!b) {
+      b = document.createElement("button");
+      b.type = "button";
+      b.className = "rain-cloud";
+      b.dataset.cloud = cloud.id;
+      b.innerHTML =
+        '<svg viewBox="0 0 40 28" aria-hidden="true"><path d="M9 19C0 19 0 9 8 9C8 0 23 0 25 8C37 4 41 19 31 19Z"/><path d="M12 22l-2 4m11-4-2 4m11-4-2 4"/></svg>';
+      strip.append(b);
+    }
+    b.style.left = `${screenPoint({ x: cloud.x, y: 0 }).x}px`;
+    b.style.zIndex = cloud.id === state.selectedCloud ? "2" : "1";
+    b.setAttribute(
+      "aria-label",
+      `Rain cloud ${i + 1}. Arrow keys move; Delete removes.`,
+    );
+    b.setAttribute("aria-pressed", String(cloud.id === state.selectedCloud));
+    b.title = `Rain cloud ${i + 1} — drag to move`;
+  });
+}
+
+function initRainClouds() {
+  const strip = document.createElement("div");
+  strip.id = "rain-strip";
+  strip.hidden = true;
+  // Cloud pointer interaction converts horizontal screen motion into canvas position. A
+  // drag remembers its starting project snapshot so movement becomes one Undo action.
+  strip.setAttribute("aria-label", "Rain cloud placement area");
+  strip.innerHTML = "<span></span>";
+  canvas.parentElement.before(strip);
+  let drag = null;
+  const position = (e) =>
+    clamp(
+      ((e.clientX - canvas.getBoundingClientRect().left - view.left) /
+        view.width -
+        state.pan.x) /
+        state.zoom,
+    );
+  strip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const b = e.target.closest("[data-cloud]");
+    if (!b) {
+      if (state.tool === "Rhythm Rain") addRain(position(e));
+      return;
+    }
+    state.selectedCloud = b.dataset.cloud;
+    state.tool = "Rhythm Rain";
+    emit("tool");
+    b.focus();
+    const cloud = state.project.rainClouds.find(
+      (c) => c.id === state.selectedCloud,
+    );
+    drag = {
+      id: cloud.id,
+      pointer: e.pointerId,
+      before: snapshot(),
+      offset: cloud.x - position(e),
+    };
+    strip.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  strip.addEventListener("pointermove", (e) => {
+    if (!drag || drag.pointer !== e.pointerId) return;
+    const cloud = state.project.rainClouds.find((c) => c.id === drag.id);
+    if (cloud) cloud.x = clamp(position(e) + drag.offset);
+    renderClouds();
+  });
+  strip.addEventListener("pointerup", (e) => {
+    if (!drag || drag.pointer !== e.pointerId) return;
+    const before = drag.before;
+    drag = null;
+    commit(before);
+    // Canceling a cloud drag restores its snapshot. Cloud keyboard controls support
+    // horizontal movement, deletion, and selection without painting accidental strokes.
+    emit("selection");
+  });
+  const cancel = () => {
+    if (!drag) return;
+    state.project = JSON.parse(drag.before);
+    drag = null;
+    emit("change");
+    emit("selection");
+  };
+  strip.addEventListener("pointercancel", cancel);
+  strip.addEventListener("lostpointercapture", cancel);
+  strip.addEventListener("keydown", (e) => {
+    const cloud = state.project.rainClouds.find(
+      (c) => c.id === e.target.dataset.cloud,
+    );
+    if (!cloud) return;
+    if (
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "Delete",
+        "Backspace",
+        "Escape",
+        "Enter",
+        " ",
+      ].includes(e.key)
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.selectedCloud = cloud.id;
+      if (e.key === "Escape") cancel();
+      else if (["Delete", "Backspace"].includes(e.key)) removeRain();
+      else if (e.key.startsWith("Arrow")) {
+        change(
+          () =>
+            (cloud.x = clamp(cloud.x + (e.key === "ArrowLeft" ? -0.01 : 0.01))),
+        );
+        emit("selection");
+      } else {
+        state.tool = "Rhythm Rain";
+        // Drawing gestures keep their own snapshots and pointer collection. Iterative
+        // path simplification removes redundant points while preserving bends and
+        // pressure changes.
+        emit("tool");
+      }
+    }
+  });
 }
 
 // Drawing tools and geometry
@@ -409,6 +655,8 @@ export function simplify(points, tolerance = 0.001) {
     }
     if (index >= 0) {
       keep[index] = 1;
+      // Shape stamps generate ordinary vector strokes. Chord and drum patterns share the
+      // same mark format as lines, circles, waves, and freehand artwork.
       stack.push([first, index], [index, last]);
     }
   }
@@ -450,6 +698,9 @@ export function shapeStrokes(a, b, type = state.brush.shape) {
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
     if (type === "Circle")
+      // Shape geometry is normalized to the drag bounds. Erasing uses point-to-segment
+      // distance, while smudging moves nearby points according to brush radius and
+      // strength.
       points.push(
         pt(
           x0 + w / 2 + (Math.cos(t * Math.PI * 2) * w) / 2,
@@ -495,6 +746,8 @@ function smudge(p, prev) {
     s.points = s.points.map((q) => {
       const d = Math.hypot(q.x - p.x, q.y - p.y);
       if (d > r) return q;
+      // Smudged marks carry their smoothing settings into audio. Selection deletion and
+      // duplication change project vectors through the existing history mechanism.
       touched = true;
       const f = (1 - d / r) * state.brush.strength;
       return {
@@ -511,6 +764,10 @@ function smudge(p, prev) {
   invalidate();
 }
 export function deleteSelection() {
+  if (state.tool === "Rhythm Rain" && state.selectedCloud) {
+    removeRain();
+    return;
+  }
   change(
     () =>
       (state.project.strokes = state.project.strokes.filter(
@@ -534,6 +791,8 @@ export function duplicateSelection() {
         })),
       }));
     state.project.strokes.push(...copies);
+    // Cancel restores the pre-gesture project and clears transient previews. Keyboard-
+    // accessible centered placement creates the same shapes as a pointer drag.
     state.selected = new Set(copies.map((s) => s.id));
   });
 }
@@ -579,6 +838,9 @@ export function initTools() {
         pan: { ...state.pan },
         center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
       };
+      // A pointer gesture records its origin, tool, and project snapshot. Musical tools
+      // intercept placement or axis movement; ordinary tools proceed to painting or
+      // selection.
       return;
     }
     if (pointers.size > 1) return;
@@ -591,6 +853,15 @@ export function initTools() {
       pan: { ...state.pan },
       tool: state.tool,
     };
+    if (MUSICAL_TOOLS.includes(state.tool)) {
+      if (state.tool === "Musical Symmetry") {
+        if (symmetry.mode !== "Horizontal") symmetry.y = p.y;
+        if (symmetry.mode !== "Vertical") symmetry.x = p.x;
+        updateSymmetry(false);
+        emit("musical-preview");
+      }
+      return;
+    }
     if (
       ["Select", "Hand", "Eraser", "Smudge", "Line", "Shape stamp"].includes(
         state.tool,
@@ -610,6 +881,9 @@ export function initTools() {
           p.y >= b.y - 0.02 &&
           p.y <= b.bottom + 0.02
         ) {
+          // Selection decides between moving, resizing, and box selection based on hit
+          // position. Painting begins with an editable stroke carrying the active brush
+          // settings.
           action.mode =
             Math.hypot(
               (p.x - b.right) * view.width,
@@ -651,6 +925,9 @@ export function initTools() {
         1 - state.zoom,
         0,
       );
+      // Two-pointer gestures pan and zoom without completing a paint action. Single-
+      // pointer movement dispatches to symmetry axes, Pan, Eraser, Smudge, or selection
+      // transforms.
       state.pan.y = clamp(
         gesture.pan.y + (cy - gesture.center.y) / view.height,
         1 - state.zoom,
@@ -662,7 +939,12 @@ export function initTools() {
     }
     if (!action || !pointers.has(e.pointerId)) return;
     const tool = action.tool;
-    if (tool === "Hand") {
+    if (tool === "Musical Symmetry") {
+      if (symmetry.mode !== "Horizontal") symmetry.y = p.y;
+      if (symmetry.mode !== "Vertical") symmetry.x = p.x;
+      updateSymmetry(false);
+      emit("musical-preview");
+    } else if (tool === "Hand") {
       state.pan.x = clamp(
         action.pan.x + (e.clientX - action.raw.x) / view.width,
         1 - state.zoom,
@@ -688,6 +970,9 @@ export function initTools() {
           const s = state.project.strokes.find((s) => s.id === original.id);
           s.points = original.points.map((q) => ({
             ...q,
+            // Selection movement translates original points, while resizing scales them
+            // around the selection bounds. Coordinates stay clamped to the canvas during
+            // either transform.
             x: clamp(
               action.mode === "move"
                 ? q.x + dx
@@ -733,6 +1018,9 @@ export function initTools() {
         if (Math.hypot(p.x - prev.x, p.y - prev.y) > 0.0006)
           action.stroke.points.push({
             ...p,
+            // Freehand movement smooths pointer samples and preserves pressure. Pointer
+            // release finalizes placement or selection and records the whole gesture as
+            // one edit.
             x: prev.x + (p.x - prev.x) * f,
             y: prev.y + (p.y - prev.y) * f,
           });
@@ -750,6 +1038,11 @@ export function initTools() {
     }
     if (!action) return;
     const p = canvasPoint(e);
+    if (action.tool === "Rhythm Rain") {
+      action = null;
+      addRain(p.x);
+      return;
+    }
     if (action.tool === "Select" && action.mode === "box") {
       const a = action.start,
         x0 = Math.min(a.x, p.x),
@@ -770,6 +1063,9 @@ export function initTools() {
       }
       emit("selection");
     } else if (action.tool === "Line" || action.tool === "Shape stamp") {
+      // Finished shape previews become real strokes, and freehand paths are simplified
+      // before committing. Control-wheel zoom changes only the view; image tracing
+      // follows below.
       const strokes = shapeStrokes(
         action.start,
         p,
@@ -786,6 +1082,7 @@ export function initTools() {
     action = null;
     setPreview(null);
     commit(before);
+    if (MUSICAL_TOOLS.includes(state.tool)) emit("selection");
     invalidate();
   };
   canvas.addEventListener("pointerup", finish);
@@ -814,6 +1111,8 @@ export function extractContours(
   { threshold = 128, invert = false, detail = 50, aspect = 1 } = {},
 ) {
   const gray = new Float32Array(width * height);
+  // Image tracing composites transparency onto white and computes grayscale threshold
+  // crossings. Shared contour nodes join cell edges into connected vector paths.
   for (let i = 0; i < gray.length; i++) {
     const a = data[i * 4 + 3] / 255;
     const v =
@@ -859,6 +1158,8 @@ export function extractContours(
         links.push(edge);
       }
     }
+  // Contour tracing consumes each edge once, then fits and simplifies paths into
+  // normalized canvas coordinates while preserving the image's aspect ratio.
   const imageAspect = (width - 1) / (height - 1);
   const fitW = Math.min(1, imageAspect / aspect),
     fitH = Math.min(1, aspect / imageAspect);
@@ -904,6 +1205,8 @@ export async function processImage(file, options) {
   if (file.size > 30 * 1024 * 1024)
     throw Error("Choose an image smaller than 30 MB.");
   let bitmap;
+  // Raster decoding limits working resolution before extracting contours. A fallback
+  // image element handles supported files when bitmap decoding is unavailable.
   try {
     bitmap = await createImageBitmap(file);
     const limit = Math.round(160 + options.detail * 4);
@@ -945,6 +1248,8 @@ export async function processImage(file, options) {
         : "This image could not be processed. Try another PNG, JPG, or WebP file.",
     );
   } finally {
+    // Decoded resources are released after tracing. The playhead ruler is a separate
+    // accessible control, so seeking does not accidentally draw on the canvas.
     bitmap?.close();
   }
 }
@@ -990,6 +1295,8 @@ export function initSeeking() {
   ruler.addEventListener("lostpointercapture", () => {
     pointer = null;
   });
+  // Ruler arrows step through beats, with Home and End targeting loop boundaries.
+  // Download helpers create temporary object URLs for project and media exports.
   ruler.addEventListener("pointercancel", () => {
     pointer = null;
   });
@@ -1021,4 +1328,228 @@ export function initSeeking() {
     requestAnimationFrame(update);
   }
   update();
+}
+
+// Project, image, MIDI, and offline audio exports
+export function download(data, name, type) {
+  const url = URL.createObjectURL(
+    data instanceof Blob ? data : new Blob([data], { type }),
+  );
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+export function exportJSON() {
+  // Project export serializes editable state; PNG renders only artwork and optional
+  // paper. WAV encoding writes a standard PCM header and interleaved sample data.
+  download(
+    JSON.stringify(state.project, null, 2),
+    `${state.project.name}.dsy`,
+    "application/json",
+  );
+}
+export function exportPNG(grid = true, texture = true) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1800;
+  canvas.height = 1000;
+  renderArtwork(canvas.getContext("2d"), 1800, 1000, { grid, texture });
+  canvas.toBlob((blob) =>
+    download(blob, `${state.project.name}.png`, "image/png"),
+  );
+}
+export function encodeWAV(buffer) {
+  const channels = buffer.numberOfChannels,
+    length = buffer.length,
+    bytes = new ArrayBuffer(44 + length * channels * 2),
+    view = new DataView(bytes);
+  const string = (at, s) =>
+    [...s].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+  string(0, "RIFF");
+  view.setUint32(4, 36 + length * channels * 2, true);
+  string(8, "WAVE");
+  string(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * channels * 2, true);
+  view.setUint16(32, channels * 2, true);
+  view.setUint16(34, 16, true);
+  string(36, "data");
+  view.setUint32(40, length * channels * 2, true);
+  let offset = 44;
+  const data = Array.from({ length: channels }, (_, i) =>
+    buffer.getChannelData(i),
+  );
+  for (let i = 0; i < length; i++) {
+    const fade = Math.min(
+      1,
+      i / (buffer.sampleRate * 0.008),
+      (length - 1 - i) / (buffer.sampleRate * 0.015),
+    );
+    // WAV samples are clipped and faded at the edges to avoid clicks. Offline rendering
+    // uses the shared note timeline, effects, metronome, and voice limit.
+    for (let c = 0; c < channels; c++) {
+      const sample = Math.max(-1, Math.min(1, data[c][i] * fade));
+      view.setInt16(offset, sample < 0 ? sample * 32768 : sample * 32767, true);
+      offset += 2;
+    }
+  }
+  return bytes;
+}
+export async function exportWAV(progress = () => {}) {
+  const p = structuredClone(state.project),
+    beats = p.bars * 4 * (p.pingpong ? 2 : 1),
+    spb = 60 / p.bpm,
+    rate = 44100,
+    Offline =
+      globalThis.OfflineAudioContext || globalThis.webkitOfflineAudioContext;
+  if (!Offline)
+    throw Error("Offline audio rendering is unavailable in this browser.");
+  const context = new Offline(2, Math.ceil(beats * spb * rate), rate),
+    graph = createGraph(context, p);
+  const notes = timeline(p);
+  let active = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i],
+      time = n.start * spb;
+    active = active.filter((v) => v.end > time);
+    if (active.length >= 32) active.shift().stop(time);
+    active.push(soundNote(context, graph, n, time, spb));
+    if (i % 200 === 0)
+      progress(Math.round((i / Math.max(1, notes.length)) * 30));
+  }
+  if (p.metronome)
+    for (let b = 0; b < beats; b++)
+      metronomeNote(context, graph, b * spb, b % 4 === 0, p.metroVolume);
+  progress(40);
+  const buffer = await context.startRendering();
+  progress(90);
+  download(encodeWAV(buffer), `${p.name}.wav`, "audio/wav");
+  progress(100);
+}
+function variable(n) {
+  const bytes = [n & 127];
+  while ((n >>= 7)) bytes.unshift((n & 127) | 128);
+  return bytes;
+}
+// MIDI helpers encode variable-length timing deltas and big-endian headers. Each track
+// sorts events, computes delta times, and ends with a standard end-of-track event.
+const ascii = (s) => [...s].map((c) => c.charCodeAt(0) & 255),
+  u32 = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255],
+  u16 = (n) => [(n >>> 8) & 255, n & 255];
+export function encodeMIDI(p) {
+  const notes = timeline(p),
+    ppq = 480,
+    tracks = [];
+  function track(events) {
+    events.sort((a, b) => a.tick - b.tick || a.order - b.order);
+    let prev = 0,
+      bytes = [];
+    for (const e of events) {
+      bytes.push(...variable(e.tick - prev), ...e.data);
+      prev = e.tick;
+    }
+    bytes.push(0, 255, 47, 0);
+    return [...ascii("MTrk"), ...u32(bytes.length), ...bytes];
+  }
+  const tempo = Math.round(60000000 / p.bpm);
+  tracks.push(
+    track([
+      {
+        tick: 0,
+        order: 0,
+        data: [
+          255,
+          81,
+          3,
+          (tempo >>> 16) & 255,
+          (tempo >>> 8) & 255,
+          tempo & 255,
+        ],
+      },
+      { tick: 0, order: 1, data: [255, 88, 4, 4, 2, 24, 8] },
+    ]),
+  );
+  p.layers.forEach((layer, index) => {
+    const name = ascii(layer.name),
+      events = [
+        {
+          tick: 0,
+          order: -2,
+          // Each layer becomes a MIDI track. Drums use the percussion channel, melodic
+          // curves become note changes, and per-note pitch shifts remain bounded to
+          // MIDI's range.
+          data: [255, 3, ...variable(name.length), ...name],
+        },
+        { tick: 0, order: -1, data: [192 + index, 80] },
+      ];
+    for (const n of notes.filter((n) => n.layerId === layer.id)) {
+      const drum = n.brush === "Drums",
+        channel = drum ? 9 : index;
+      const parts = drum
+        ? [
+            {
+              beat: 0,
+              pitch:
+                { kick: 36, snare: 38, "closed hi-hat": 42, "open hi-hat": 46 }[
+                  n.sound.drum
+                ] || 36,
+            },
+          ]
+        : n.curve;
+      const simplified = [];
+      for (const q of parts) {
+        const pitch = Math.max(
+          0,
+          Math.min(127, Math.round(q.pitch + (drum ? n.pitchShift || 0 : 0))),
+        );
+        if (!simplified.length || simplified.at(-1).pitch !== pitch)
+          simplified.push({ ...q, pitch });
+      }
+      for (let i = 0; i < simplified.length; i++) {
+        const q = simplified[i],
+          end = i + 1 < simplified.length ? simplified[i + 1].beat : n.duration,
+          startTick = Math.round((n.start + q.beat) * ppq),
+          endTick = Math.max(startTick + 1, Math.round((n.start + end) * ppq));
+        events.push(
+          {
+            tick: startTick,
+            order: 1,
+            // MIDI note-on and note-off events carry velocity and duration at 480 ticks
+            // per beat. The final file combines the tempo track and all layer tracks for
+            // download.
+            data: [
+              144 + channel,
+              q.pitch,
+              Math.max(1, Math.round(n.velocity * 127)),
+            ],
+          },
+          { tick: endTick, order: 0, data: [128 + channel, q.pitch, 0] },
+        );
+      }
+    }
+    tracks.push(track(events));
+  });
+  return new Uint8Array([
+    ...ascii("MThd"),
+    0,
+    0,
+    0,
+    6,
+    0,
+    1,
+    ...u16(tracks.length),
+    ...u16(ppq),
+    ...tracks.flat(),
+  ]);
+}
+export function exportMIDI() {
+  download(
+    encodeMIDI(state.project),
+    `${state.project.name}.mid`,
+    "audio/midi",
+  );
 }

@@ -6,7 +6,7 @@ A retro paint program that turns vector drawings into looping music. Built with 
 
 From this directory, run `npm start` (or `python3 -m http.server 8080`), then open **http://localhost:8080**. ES modules require a server; opening `index.html` as a `file://` URL will not work. To deploy, publish this directory from a GitHub Pages branch; all paths are relative and no build is required.
 
-The app uses five JavaScript modules: `js/app.js` for the interface, `js/state.js` for project state and storage, `js/audio.js` for synthesis and playback, `js/canvas.js` for rendering, drawing tools, image import, and seeking, and `js/export.js` for file exports. All styles and CSS variables live in `styles.css`.
+The app uses four JavaScript modules: `js/app.js` for the interface, `js/state.js` for project state, storage, musical transforms, and rain geometry, `js/audio.js` for synthesis and playback, and `js/canvas.js` for rendering, drawing tools, image import, seeking, and file exports. All styles and CSS variables live in `styles.css`. Main JavaScript files include functionality comments at intervals of roughly 50 lines.
 
 ## Play and draw
 
@@ -24,6 +24,16 @@ Every visit or refresh opens a new blank drawing with default project settings. 
 Tool properties expose size, opacity, hardness, smoothing, volume, attack, and release where relevant. Expand “Brush & envelope” for advanced settings. Sound properties contain scale, range, effects, and metronome settings. Sliders have adjacent editable number fields. Paper and grid settings never modify notes.
 
 Click a layer name to paint on it. Eye controls only visibility; M mutes, S solos. “Edit layer” renames, adjusts volume, reorders, duplicates, or deletes it. Up to eight layers. Drag the blue Tools or Properties title bar to float that panel on desktop; double-click the title bar to dock again. On smaller screens use the title-bar settings button.
+
+## Musical tools
+
+**Musical Symmetry**, **Echo Paint**, and **Rhythm Rain** sit directly below Pan. Choosing any of them opens its settings in Properties.
+
+- **Musical Symmetry:** pressing the tool immediately mirrors all visible marks, with no selection or Apply step. Vertical reflects pitch across a horizontal axis; Horizontal reflects timing across a vertical axis. Both creates three reflections. Move axes with the percentage controls or drag on the canvas; the actual playable copies update automatically. Keep Original retains the source marks; Destination sends copies to the current layer or Harmony (created if needed). Creation and adjustments support Undo/Redo. Done returns to Select for editing the copies. Reflections outside the canvas clamp to its edges, and sounding pitches stay within MIDI limits.
+- **Echo Paint:** select marks and press Play to hear the faded preview copies before applying. Choose 1–8 copies and a delay of 1/16, 1/8, 1/4, or 1/2 **beat**. Fade reduces both opacity and volume by that percentage for each successive copy; 100% produces silent, transparent copies. Pitch Change adds −12 to +12 semitones per copy. Echoes wrap around the loop with split vectors at the seam. Separate Layer sends copies to an Echo layer; otherwise they keep their source layers. Apply keeps the copies in the saved drawing and exports in one Undo action. Switching away cancels unapplied previews. Copies keep their brush and envelope, remain selectable and editable, and retain their pitch offsets when saved.
+- **Rhythm Rain:** click the strip above the canvas (or the canvas itself) to place up to four clouds. Drag a cloud horizontally; its dotted boundary shows selection. Properties offers Rain Amount (droplets per division), Fall Speed (canvas heights per beat), Spread, and 1/4–1/32 **note** divisions. Choose a cloud from the dropdown, or use Place rain centered with the keyboard. Focus a cloud and use Left/Right to move it and Delete to remove it, or click Remove Rain. Adding, dragging, changing settings, and removing clouds support Undo/Redo.
+
+Rain droplets fall during playback and freeze on pause. Each droplet hits only the first painted mark in its path, producing a small splash and a note with that mark's brush, contact pitch, and layer settings; droplet size slightly changes velocity. Rain adds notes alongside ordinary playhead playback. The pattern is seeded by the saved cloud ID, and all timing is measured in beats, so loops repeat and BPM changes stay synchronized. Loop playback includes droplets already falling across the boundary; non-loop playback starts with an empty sky. Mute and Solo apply to rain notes; hiding a layer still preserves its sound. Live playback, WAV, and MIDI use the same collision schedule, including both passes of ping-pong loops. Project files preserve clouds and settings; PNG exports the painted artwork without cloud controls or animated droplets.
 
 ## Images and pitch
 
@@ -47,10 +57,14 @@ Click or drag the top canvas ruler to seek without drawing. Playback continues f
 | Ctrl/Command + Shift + Z | Redo                                         |
 | Ctrl/Command + S         | Save / rename                                |
 | Ctrl/Command + A         | Select all                                   |
+| Ctrl/Command + C         | Copy selected marks                          |
+| Ctrl/Command + V         | Paste copied marks                           |
 | Ctrl/Command + D         | Duplicate selection                          |
 | Ctrl/Command + N         | New drawing                                  |
 | Delete / Backspace       | Delete selection                             |
 | Escape                   | Cancel current action / close dialog or menu |
+
+Select marks and use Command/Ctrl+C and Command/Ctrl+V, or right-click the canvas for Copy and Paste. These commands also appear in Edit and Select Properties. Keyboard Paste offsets copies; right-click Paste centers them at the clicked position, keeping the whole group inside the canvas. Pasted marks keep their brush and sound settings, go onto the current layer, remain selected and editable, and support Undo/Redo. The drawing clipboard stays within this browser tab and works across projects; text fields retain normal text copy/paste.
 
 History retains 60 actions. Completed strokes, erase gestures, transforms, stamps, layer changes, and settings changes are reversible. Undo history is session-local.
 
@@ -71,4 +85,6 @@ Modern Chrome, Edge, Firefox, and Safari are recommended. Browser audio starts o
 
 ## Verification
 
-`npm test` runs deterministic composition, MIDI/WAV encoding, input validation, and geometry tests with Node's built-in test runner. `npm install` installs development-only tools. With the local server running, `npm run test:browser` runs the browser checks (run `npx playwright install chromium` once if needed). The app itself has no package dependencies.
+`npm test` runs all 41 unit tests from `tests/core.test.js`, covering composition, MIDI/WAV encoding, validation, geometry, image tracing, and musical tools. `npm ci` installs the locked development-only tools. With the local server running, `npm run test:browser` runs `tests/browser.mjs`, which groups the existing drawing/export, image/pitch, and musical-tool browser checks (run `npx playwright install chromium` once if needed). The app itself has no package dependencies.
+
+Installed dependencies (`node_modules/`), generated browser artifacts (`tests/artifacts/`), and macOS metadata are ignored by Git. Dependencies stay available locally for development; regenerate them with `npm ci` after a fresh checkout. Browser artifacts are disposable and recreated by the browser suite.

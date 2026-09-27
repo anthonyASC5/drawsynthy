@@ -274,6 +274,11 @@ label.check {
 .menu-list small {
   color: var(--color-muted);
 }
+.menu-list.canvas-menu {
+  position: fixed;
+  z-index: 100;
+  width: 160px;
+}
 .toolbar {
   display: flex;
   align-items: center;
@@ -2080,6 +2085,40 @@ body {
 .toolbar .tool-group:nth-child(3) {
   display: flex;
 }
+#rain-strip {
+  position: relative;
+  flex: 0 0 42px;
+  height: 42px;
+  overflow: hidden;
+  background: #e8e8df;
+  border: 1px solid #888;
+  box-shadow: inset 1px 1px #fff;
+  touch-action: none;
+}
+#rain-strip[hidden] { display: none; }
+#rain-strip.placing { cursor: crosshair; }
+#rain-strip > span {
+  display: block;
+  padding: 12px 8px;
+  font: 10px Tahoma, sans-serif;
+  color: #555;
+  pointer-events: none;
+}
+.rain-cloud {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 36px;
+  padding: 1px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.rain-cloud[aria-pressed="true"] { border: 1px dotted #163e9a; }
+.rain-cloud svg { width: 36px; height: 28px; fill: #fafaff; stroke: #355b91; stroke-width: 1.5; }
 @media (min-width: 1101px) {
   .palette {
     width: 120px;
