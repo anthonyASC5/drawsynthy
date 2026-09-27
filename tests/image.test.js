@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractContours } from "../js/image-import.js";
+import { extractContours } from "../js/canvas.js";
 function rectangle() {
   const width = 80,
     height = 40,

@@ -8,11 +8,11 @@ import {
   change,
   undo,
   redo,
+  validateProject,
 } from "../js/state.js";
 import { compileNotes, timeline } from "../js/audio.js";
-import { validateProject } from "../js/storage.js";
 import { encodeMIDI, encodeWAV } from "../js/export.js";
-import { simplify, shapeStrokes } from "../js/tools.js";
+import { simplify, shapeStrokes } from "../js/canvas.js";
 const drawing = () => {
   const p = defaults();
   p.strokes = [

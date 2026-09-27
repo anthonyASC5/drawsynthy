@@ -1,6 +1,16 @@
-import { state } from "./state.js";
-import { timeline, createGraph, soundNote, metronomeNote } from "./audio.js";
-import { renderArtwork } from "./canvas.js";
+import {
+  state,
+} from "./state.js";
+import {
+  timeline,
+  createGraph,
+  soundNote,
+  metronomeNote,
+} from "./audio.js";
+import {
+  renderArtwork,
+} from "./canvas.js";
+
 export function download(data, name, type) {
   const url = URL.createObjectURL(
     data instanceof Blob ? data : new Blob([data], { type }),

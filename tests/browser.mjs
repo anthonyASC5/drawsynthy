@@ -184,7 +184,7 @@ try {
   await page.keyboard.press("Delete");
   assert.equal(await count(), original + 4);
   // Escape rolls back an unfinished stroke.
-  await page.getByRole("button", { name: "Ink", exact: true }).click();
+  await page.getByRole("button", { name: "Ink (synth lead)", exact: true }).click();
   const beforeCancel = await count();
   await page.mouse.move(box.x + 80, box.y + 80);
   await page.mouse.down();
@@ -310,7 +310,8 @@ try {
         graph = createGraph(ctx, p);
       const n = {
         ...timeline(p)[0],
-        brush: "Airbrush",
+        brush: "Drums",
+        sound: { ...timeline(p)[0].sound, drum: "snare" },
         start: 0,
         duration: 0.25,
         seed: 123,

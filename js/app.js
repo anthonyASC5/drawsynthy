@@ -16,17 +16,23 @@ import {
   newStroke,
   snapshot,
   commit,
+  saveProject,
+  listProjects,
+  removeProject,
+  validateProject,
 } from "./state.js";
-import { initSeeking } from "./seeking.js";
-import { processImage } from "./image-import.js";
-import { initCanvas, resetPaper, view } from "./canvas.js";
 import {
+  initSeeking,
+  processImage,
+  initCanvas,
+  resetPaper,
+  view,
   initTools,
   deleteSelection,
   duplicateSelection,
   cancelAction,
   placeCentered,
-} from "./tools.js";
+} from "./canvas.js";
 import {
   initTransport,
   play,
@@ -34,14 +40,9 @@ import {
   stop,
   seekStart,
   previewSound,
-} from "./transport.js";
-import {
-  saveProject,
-  listProjects,
-  removeProject,
-  validateProject,
-} from "./storage.js";
+} from "./audio.js";
 import { exportJSON, exportPNG, exportWAV, exportMIDI } from "./export.js";
+
 const $ = (s) => document.querySelector(s),
   el = (tag, attrs = {}, text) => {
     const e = document.createElement(tag);
@@ -63,7 +64,6 @@ const paths = [
   "M5 20 8 10 15 3 21 9 14 17 5 20ZM8 10l6 7M8 16l5-5M16 4l4 4",
   "M7 18c-4-3 1-6 3-8L16 2l5 4-9 10c-1 6-6 7-9 4 3 0 3-1 4-2Z",
   "M4 18 8 11 17 2 22 7 12 17 4 18ZM8 11l4 6M4 18l-1 3 5-1",
-  "M5 15h8v7H5zM8 15V9h5l4-4M17 5h2M20 9h1M19 13h2M22 3h1M4 18h10",
   "M4 16h4V8h4v13h4V3h4v13",
   "M4 9c0-5 17-5 17 0v9c0 5-17 5-17 0ZM4 9c0 5 17 5 17 0M6 3l15 9M20 2 6 13",
   "M3 15 13 3l9 8-10 11H9ZM7 10l9 8M12 22h11",
@@ -78,7 +78,6 @@ const hints = {
   Ink: "Draw a melody. Up is higher, right is later.",
   Watercolor: "Wash in a soft, slow pad. Overlap marks for a chord.",
   Marker: "Broad strokes make warm, sustained tones.",
-  Airbrush: "Spray a little atmosphere into your loop.",
   Bass: "Low-end color. The next bass mark takes over the note.",
   Drums: "Tap for a beat, or drag a trail of drum dots.",
   Eraser: "Erase whole marks on the active layer. Undo brings them back.",
@@ -196,7 +195,6 @@ function selectTool(tool) {
     Ink: [9, 0.025, 0.18],
     Watercolor: [29, 0.25, 0.65],
     Marker: [20, 0.05, 0.25],
-    Airbrush: [25, 0.12, 0.3],
     Bass: [14, 0.02, 0.16],
     Drums: [12, 0.003, 0.08],
   };
@@ -208,11 +206,24 @@ function selectTool(tool) {
   $("#tool-settings").parentElement.open = true;
   emit("tool");
 }
+function toolLabel(name) {
+  const sounds = {
+    Pencil: "soft pluck",
+    Ink: "synth lead",
+    Watercolor: "soft pad",
+    Marker: "warm tone",
+    Bass: "low synth",
+    Drums: "percussion",
+  };
+  return sounds[name]
+    ? `${name} (${sounds[name]})`
+    : { "Shape stamp": "Shapes", Hand: "Pan" }[name] || name;
+}
 function renderTools() {
   const container = $("#tools");
   TOOLS.forEach((name, i) => {
     if (name === "Smudge") return;
-    const label = { "Shape stamp": "Shapes", Hand: "Pan" }[name] || name;
+    const label = toolLabel(name);
     const b = button(container, "", () => selectTool(name), {
       class: "tool-button",
       title: label,
@@ -226,8 +237,7 @@ function renderTools() {
 function toolSettings() {
   const p = $("#tool-settings");
   p.replaceChildren();
-  $("#tool-name").textContent =
-    { "Shape stamp": "Shapes", Hand: "Pan" }[state.tool] || state.tool;
+  $("#tool-name").textContent = toolLabel(state.tool);
   const brush = (key, label, min, max, step = 1, scale = 1) =>
     range(p, label, state.brush[key] * scale, min, max, step, (n) => {
       state.brush[key] = n / scale;

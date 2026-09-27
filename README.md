@@ -6,13 +6,15 @@ A retro paint program that turns vector drawings into looping music. Built with 
 
 From this directory, run `npm start` (or `python3 -m http.server 8080`), then open **http://localhost:8080**. ES modules require a server; opening `index.html` as a `file://` URL will not work. To deploy, publish this directory from a GitHub Pages branch; all paths are relative and no build is required.
 
+The app uses five JavaScript modules: `js/app.js` for the interface, `js/state.js` for project state and storage, `js/audio.js` for synthesis and playback, `js/canvas.js` for rendering, drawing tools, image import, and seeking, and `js/export.js` for file exports. All styles and CSS variables live in `styles.css`.
+
 ## Play and draw
 
 Every visit or refresh opens a new blank drawing with default project settings. Add your own marks, then press Play. Open saved drawings through File → Open. New also creates a blank drawing. Horizontal position is time; vertical position is pitch. Longer strokes sustain and glide, thicker strokes play louder, and opacity adds brightness. The loop is deterministic, including seeded noise and the reverb impulse.
 
 - **Pencil:** quiet sine pluck. **Ink:** bright sawtooth lead.
 - **Watercolor:** translucent soft pad. **Marker:** warm triangle sustain.
-- **Airbrush:** dotted filtered noise. **Bass:** low sawtooth, monophonic across bass marks.
+- **Bass:** low sawtooth, monophonic across bass marks.
 - **Drums:** kick, snare, closed or open hi-hat. Drag to place a trail.
 - **Eraser:** removes intersecting whole vector strokes on the active layer.
 - **Select:** drag a rectangle (or click a mark); drag selected artwork to move it. Drag the bottom-right handle to resize. Properties includes duplicate, delete, and move to layer.
