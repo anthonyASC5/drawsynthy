@@ -16,6 +16,24 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.goto("http://127.0.0.1:8080");
     await page.waitForFunction(() => window.drawSynth);
     assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.melody),
+      false,
+    );
+    assert.equal(
+      await page.locator("#melody-button").getAttribute("aria-pressed"),
+      "false",
+    );
+    await page.locator("#melody-button").click();
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.melody),
+      true,
+    );
+    await page.locator("#melody-button").click();
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.melody),
+      false,
+    );
+    assert.equal(
       await page.evaluate(() => window.drawSynth.state.project.strokes.length),
       0,
     );
@@ -133,13 +151,13 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.locator("#toolbar [data-action=redo]").click();
     assert.equal(await count(), original + 1);
     const notesBefore = await page.evaluate(async () => {
-      const { compileNotes } = await import("./js/audio.js");
+      const { compileNotes } = await import("./audio.js");
       return JSON.stringify(compileNotes(window.drawSynth.state.project));
     });
     await page.locator("#paper-type").selectOption("Dark Paper");
     assert.equal(
       await page.evaluate(async () => {
-        const { compileNotes } = await import("./js/audio.js");
+        const { compileNotes } = await import("./audio.js");
         return JSON.stringify(compileNotes(window.drawSynth.state.project));
       }),
       notesBefore,
@@ -164,7 +182,7 @@ import { mkdir, readFile } from "node:fs/promises";
       );
     const screen = async (p) =>
       page.evaluate(async (p) => {
-        const { screenPoint } = await import("./js/canvas.js");
+        const { screenPoint } = await import("./canvas.js");
         const q = screenPoint(p),
           r = document.querySelector("canvas").getBoundingClientRect();
         return { x: q.x + r.x, y: q.y + r.y };
@@ -197,7 +215,7 @@ import { mkdir, readFile } from "node:fs/promises";
     assert.equal(await count(), original + 4);
     // Escape rolls back an unfinished stroke.
     await page
-      .getByRole("button", { name: "Ink (synth lead)", exact: true })
+      .getByRole("button", { name: "Ink (retro rage synth)", exact: true })
       .click();
     const beforeCancel = await count();
     await page.mouse.move(box.x + 80, box.y + 80);
@@ -232,7 +250,7 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.reload();
     await page.waitForFunction(() => window.drawSynth);
     const freshState = await page.evaluate(async () => {
-      const { defaults } = await import("./js/state.js");
+      const { defaults } = await import("./state.js");
       const { state } = window.drawSynth;
       return {
         project: state.project,
@@ -319,8 +337,7 @@ import { mkdir, readFile } from "node:fs/promises";
     }
     // Noise and effects render repeatably, without requiring a physical audio device.
     const offline = await page.evaluate(async () => {
-      const { createGraph, soundNote, timeline } =
-        await import("./js/audio.js");
+      const { createGraph, soundNote, timeline } = await import("./audio.js");
       const p = window.drawSynth.state.project;
       async function render() {
         const ctx = new OfflineAudioContext(2, 22050, 44100),
@@ -501,14 +518,11 @@ import { mkdir, readFile } from "node:fs/promises";
       assert.ok(
         await page.evaluate(() => window.drawSynth.state.selected.size > 0),
       );
-      await page
-        .getByRole("button", { name: "Paint coral", exact: true })
-        .click();
       assert.ok(
         await page.evaluate(() =>
           window.drawSynth.state.project.strokes
             .filter((s) => window.drawSynth.state.selected.has(s.id))
-            .every((s) => s.color === "#e65661"),
+            .every((s) => s.color === "#8581cb"),
         ),
       );
       await page.locator("#toolbar [data-action=play]").click();
@@ -539,8 +553,8 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     // An offline oscillator should double its zero-crossing frequency at +12.
     const ratio = await page.evaluate(async () => {
-      const { defaults } = await import("./js/state.js");
-      const { timeline, soundNote } = await import("./js/audio.js");
+      const { defaults } = await import("./state.js");
+      const { timeline, soundNote } = await import("./audio.js");
       const p = defaults();
       p.strokes = [
         {
@@ -574,7 +588,7 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.screenshot({ path: "tests/artifacts/image-pitch.png" });
     assert.deepEqual(errors, []);
     console.log(
-      "Image PNG/JPG/WebP, vector import/recolor/playback, invalid images, Pitch keyboard/reset/undo/limits, and offline octave shift passed.",
+      "Image PNG/JPG/WebP, vector import/brush colors/playback, invalid images, Pitch keyboard/reset/undo/limits, and offline octave shift passed.",
     );
   } finally {
     await browser.close();
@@ -606,8 +620,7 @@ import { mkdir, readFile } from "node:fs/promises";
   const redo = () => page.locator("#toolbar [data-action=redo]").click();
   async function fixture() {
     await page.evaluate(async () => {
-      const { defaults, loadProject, newStroke } =
-        await import("./js/state.js");
+      const { defaults, loadProject, newStroke } = await import("./state.js");
       const p = defaults();
       p.bars = 1;
       p.strokes = [
@@ -693,7 +706,7 @@ import { mkdir, readFile } from "node:fs/promises";
     );
     const mirroredAudio = await page.evaluate(async () => {
       const { compileNotes, soundNote, createGraph } =
-        await import("./js/audio.js");
+        await import("./audio.js");
       const p = structuredClone(window.drawSynth.state.project);
       p.strokes = p.strokes.slice(1);
       const ctx = new OfflineAudioContext(1, 88200, 44100),
@@ -729,8 +742,8 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.getByLabel("Separate Layer", { exact: true }).check();
     await page.screenshot({ path: "/tmp/draw-synth-musical/echo.png" });
     const expectedPreviewNotes = await page.evaluate(async () => {
-      const { playbackProject } = await import("./js/state.js");
-      const { timeline } = await import("./js/audio.js");
+      const { playbackProject } = await import("./state.js");
+      const { timeline } = await import("./audio.js");
       const original = AudioContext.prototype.createOscillator;
       window.testOscillators = 0;
       window.restoreOscillators = () => {
@@ -898,21 +911,20 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.screenshot({ path: "/tmp/draw-synth-musical/rain.png" });
     await page.locator("#toolbar [data-action=play]").click();
     const beat = await page.evaluate(async () =>
-      (await import("./js/audio.js")).transportBeat(),
+      (await import("./audio.js")).transportBeat(),
     );
     await page.waitForTimeout(150);
     assert.equal(
       await page.evaluate(async () =>
-        (await import("./js/audio.js")).transportBeat(),
+        (await import("./audio.js")).transportBeat(),
       ),
       beat,
     );
     await page.locator("#toolbar [data-action=stop]").click();
 
     const rendered = await page.evaluate(async () => {
-      const { timeline, soundNote, createGraph } =
-        await import("./js/audio.js");
-      const { validateProject } = await import("./js/state.js");
+      const { timeline, soundNote, createGraph } = await import("./audio.js");
+      const { validateProject } = await import("./state.js");
       const p = window.drawSynth.state.project;
       const notes = timeline(p).filter((n) => n.rain);
       const render = async () => {
@@ -1072,6 +1084,179 @@ import { mkdir, readFile } from "node:fs/promises";
     assert.deepEqual(errors, []);
     console.log(
       "Copy/paste passed: Command and Control shortcuts, text input exclusion, context menu, keyboard navigation, editable vectors, and Undo/Redo.",
+    );
+  } finally {
+    await browser.close();
+  }
+}
+
+// Synthjump controls, instrument colors, and mobile rendering
+{
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1000 },
+  });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await page.goto("http://127.0.0.1:8080");
+    await page.waitForFunction(() => window.drawSynth);
+    assert.equal(await page.locator("#custom-color, .swatch").count(), 0);
+    assert.equal(await page.locator(".tool-color-key").count(), 6);
+    await page.locator("#synthjump").click();
+    assert.equal(
+      await page.locator("#synthjump").getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(await page.locator("#paper-type").inputValue(), "Graph Paper");
+    await page.keyboard.down("ArrowRight");
+    await page.keyboard.press("Space");
+    await page.waitForTimeout(1700);
+    await page.keyboard.up("ArrowRight");
+    const stroke = await page.evaluate(
+      () => window.drawSynth.state.project.strokes[0],
+    );
+    assert.ok(stroke.points.length > 50);
+    assert.ok(Math.min(...stroke.points.map((p) => p.y)) < 0.3, "high jump");
+    assert.ok(
+      stroke.points.at(-1).x > stroke.points[0].x + 0.3,
+      "moves right while drawing",
+    );
+    assert.equal(
+      stroke.color,
+      await page.evaluate(() => window.drawSynth.state.color),
+    );
+    assert.equal(
+      stroke.size,
+      await page.evaluate(() => window.drawSynth.state.brush.size),
+    );
+    const result = await page.evaluate(async () => {
+      const { timeline } = await import("/audio.js");
+      const { validateProject } = window.drawSynth;
+      validateProject(
+        JSON.parse(JSON.stringify(window.drawSynth.state.project)),
+      );
+      return timeline(window.drawSynth.state.project).length;
+    });
+    assert.ok(result > 0, "jump trail compiles to music");
+    await page.keyboard.press("ControlOrMeta+z");
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.strokes.length),
+      0,
+    );
+    await page.keyboard.press("ControlOrMeta+Shift+z");
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.strokes.length),
+      1,
+    );
+    await page.locator("#synthjump-play").click();
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.playing),
+      true,
+    );
+    await page.locator("#synthjump-play").click();
+    await page.locator('[data-jump-control="ArrowUp"]').click();
+    await page.waitForTimeout(1700);
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.strokes.length),
+      2,
+    );
+    for (const brush of [
+      "Pencil",
+      "Watercolor",
+      "Marker",
+      "Bass",
+      "Drums",
+      "Ink",
+    ]) {
+      await page.locator(`[data-tool="${brush}"]`).click();
+      assert.equal(
+        await page.locator("#synthjump").getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(await page.locator("#synthjump-brush").textContent(), brush);
+      await page.locator('[data-jump-control="ArrowUp"]').click();
+      await page.waitForTimeout(1700);
+      const actual = await page.evaluate(() => {
+        const { project, brush, tool, color } = window.drawSynth.state;
+        return { stroke: project.strokes.at(-1), brush, tool, color };
+      });
+      assert.equal(actual.stroke.brush, brush);
+      const colors = {
+        Pencil: "#e65661",
+        Ink: "#8581cb",
+        Watercolor: "#4b7ed5",
+        Marker: "#f3a24b",
+        Bass: "#80b775",
+        Drums: "#efd462",
+      };
+      assert.equal(actual.stroke.color, colors[brush]);
+      assert.equal(actual.color, colors[brush]);
+      assert.equal(actual.stroke.size, actual.brush.size);
+      assert.equal(actual.stroke.opacity, actual.brush.opacity);
+      assert.deepEqual(actual.stroke.sound, actual.brush);
+    }
+    await page.locator('[data-jump-control="ArrowUp"]').click();
+    await page.waitForTimeout(300);
+    const beforeSwitch = await page.evaluate(
+      () => window.drawSynth.state.project.strokes.length,
+    );
+    await page.locator('[data-tool="Bass"]').click();
+    await page.waitForTimeout(1400);
+    const switched = await page.evaluate(() =>
+      window.drawSynth.state.project.strokes.slice(-2),
+    );
+    assert.equal(
+      await page.evaluate(() => window.drawSynth.state.project.strokes.length),
+      beforeSwitch + 2,
+    );
+    assert.equal(switched[0].brush, "Ink");
+    assert.equal(switched[1].brush, "Bass");
+    assert.deepEqual(switched[0].points.at(-1), switched[1].points[0]);
+    assert.equal(
+      await page.locator("#synthjump").getAttribute("aria-pressed"),
+      "true",
+    );
+    await page.locator("#synthjump-exit").click();
+    assert.equal(await page.locator("#synthjump-controls").isVisible(), false);
+    assert.equal(
+      await page.locator("#synthjump").getAttribute("aria-pressed"),
+      "false",
+    );
+    await page.locator("#synthjump").click();
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#synthjump-controls").isVisible(), false);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator("#synthjump").click();
+    assert.ok(await page.locator('[data-jump-control="ArrowUp"]').isVisible());
+    await page.waitForTimeout(150);
+    assert.ok(
+      await page.evaluate(() => {
+        const c = document.querySelector("#drawing");
+        const pixels = c
+          .getContext("2d")
+          .getImageData(0, 0, c.width, c.height).data;
+        for (let i = 0; i < pixels.length; i += 4)
+          if (
+            pixels[i] === 40 &&
+            pixels[i + 1] === 120 &&
+            pixels[i + 2] === 235
+          )
+            return true;
+        return false;
+      }),
+      "blue character is rendered on mobile canvas",
+    );
+    await page.screenshot({ path: "tests/artifacts/synthjump-mobile.png" });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+    );
+    assert.deepEqual(errors, []);
+    console.log(
+      "Synthjump browser checks passed: controls, jump geometry, audio, history, exit, and mobile layout.",
     );
   } finally {
     await browser.close();

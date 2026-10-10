@@ -24,6 +24,9 @@ import {
   removeRain,
 } from "./state.js";
 import {
+  play,
+  pause,
+  seekStart,
   seek,
   transportBeat,
   timeline,
@@ -67,14 +70,14 @@ export function screenPoint(p) {
     y: view.top + (p.y * state.zoom + state.pan.y) * view.height,
   };
 }
-export function setPreview(p) {
+function setPreview(p) {
   preview = p;
   dirty = true;
 }
-export function invalidate() {
+function invalidate() {
   dirty = true;
 }
-export function bounds(strokes) {
+function bounds(strokes) {
   const pts = strokes.flatMap((s) => s.points);
   if (!pts.length) return null;
   return {
@@ -198,7 +201,7 @@ function drawStroke(c, s, w, h, pan = state.pan, zoom = state.zoom) {
   }
   c.restore();
 }
-export function renderArtwork(c, w, h, options = {}) {
+function renderArtwork(c, w, h, options = {}) {
   const p = state.project;
   paper(c, w, h, p, {
     ...options,
@@ -347,6 +350,7 @@ function render() {
     ctx.stroke();
   }
   ctx.restore();
+  drawSynthjump(ctx, view, drawStroke);
   const selected = state.project.strokes.filter((s) =>
     state.selected.has(s.id),
   );
@@ -435,8 +439,9 @@ export function initCanvas() {
     renderClouds();
   });
   initRainClouds();
-  function frame() {
-    if (dirty || state.playing) {
+  function frame(time) {
+    updateSynthjump(time ?? performance.now());
+    if (dirty || state.playing || jumper.active) {
       render();
       dirty = false;
     }
@@ -822,6 +827,10 @@ export function placeCentered() {
 export function initTools() {
   const canvas = canvasElement();
   canvas.addEventListener("pointerdown", (e) => {
+    if (jumper.active) {
+      canvas.focus();
+      return;
+    }
     if (e.button !== 0) return;
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1331,7 +1340,7 @@ export function initSeeking() {
 }
 
 // Project, image, MIDI, and offline audio exports
-export function download(data, name, type) {
+function download(data, name, type) {
   const url = URL.createObjectURL(
     data instanceof Blob ? data : new Blob([data], { type }),
   );
@@ -1552,4 +1561,266 @@ export function exportMIDI() {
     `${state.project.name}.mid`,
     "audio/midi",
   );
+}
+
+// Synthjump overlays and controls share the canvas and normal stroke model.
+const jumper = { active: false, x: 0.08, y: 0.94, vy: 0, facing: 1 };
+const jumpHeld = new Set();
+let jumpTrail = null,
+  jumpProject = null,
+  jumpLastTime = null;
+const ground = 0.94;
+const characterBrushes = new Set([
+  "Pencil",
+  "Ink",
+  "Watercolor",
+  "Marker",
+  "Bass",
+  "Drums",
+]);
+function makeTrail() {
+  jumpProject = state.project;
+  return newStroke([{ x: jumper.x, y: jumper.y, pressure: 0.65 }]);
+}
+
+function finishHop() {
+  if (!jumpTrail) return;
+  const stroke = jumpTrail;
+  jumpTrail = null;
+  if (jumpProject !== state.project) return;
+  const before = snapshot();
+  state.project.strokes.push(stroke);
+  commit(before);
+}
+function resetJumper() {
+  jumpHeld.clear();
+  jumpTrail = null;
+  jumpLastTime = null;
+  Object.assign(jumper, { x: 0.08, y: ground, vy: 0, facing: 1 });
+}
+function syncJumper() {
+  document
+    .querySelector("#synthjump")
+    .setAttribute("aria-pressed", String(jumper.active));
+  document.querySelector("#synthjump-controls").hidden = !jumper.active;
+  document.body.classList.toggle("synthjump-active", jumper.active);
+  document.querySelector("#synthjump-brush").textContent = state.tool;
+}
+function exitSynthjump() {
+  if (!jumper.active) return;
+  finishHop();
+  jumper.active = false;
+  resetJumper();
+  syncJumper();
+  emit("view");
+}
+function jump() {
+  if (!jumper.active || state.playing || jumpTrail) return;
+  if (
+    state.project.strokes.length >= 10000 ||
+    state.project.strokes.reduce((n, s) => n + s.points.length, 0) > 499800
+  ) {
+    document.querySelector("#status-message").textContent =
+      "Drawing limit reached. Remove some marks before jumping.";
+    return;
+  }
+  jumpTrail = makeTrail();
+  jumper.vy = -1.9;
+  emit("view");
+}
+export function synthjumpKey(e) {
+  if (
+    !jumper.active ||
+    e.ctrlKey ||
+    e.metaKey ||
+    e.altKey ||
+    e.target.closest(
+      "input,select,textarea,[contenteditable]:not([contenteditable=false])",
+    ) ||
+    document.querySelector("#dialog").open
+  )
+    return false;
+  if (e.key === "Escape") exitSynthjump();
+  else if (["ArrowLeft", "ArrowRight", "ArrowUp", " "].includes(e.key)) {
+    jumpHeld.add(e.key);
+    if (!e.repeat && ["ArrowUp", " "].includes(e.key)) jump();
+  } else return false;
+  e.preventDefault();
+  return true;
+}
+
+function updateSynthjump(time) {
+  if (!jumper.active) {
+    jumpLastTime = null;
+    return;
+  }
+  const dt =
+    jumpLastTime === null ? 0 : Math.min((time - jumpLastTime) / 1000, 0.04);
+  jumpLastTime = time;
+  if (
+    state.playing ||
+    document.hidden ||
+    document.querySelector("#dialog").open
+  )
+    return;
+  const direction =
+    Number(jumpHeld.has("ArrowRight")) - Number(jumpHeld.has("ArrowLeft"));
+  if (direction) jumper.facing = direction;
+  jumper.x = clamp(jumper.x + direction * 0.28 * dt, 0.02, 0.98);
+  if (jumpTrail) {
+    jumper.y = clamp(jumper.y + jumper.vy * dt + 1.2 * dt * dt, 0.04, ground);
+    jumper.vy += 2.4 * dt;
+    const previous = jumpTrail.points.at(-1);
+    if (Math.hypot(previous.x - jumper.x, previous.y - jumper.y) > 0.004)
+      jumpTrail.points.push({ x: jumper.x, y: jumper.y, pressure: 0.65 });
+    if (jumper.y >= ground && jumper.vy > 0) {
+      finishHop();
+      jumper.vy = 0;
+    }
+  }
+}
+
+function drawSynthjump(ctx, view, drawStroke) {
+  if (!jumper.active) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(view.left, view.top, view.width, view.height);
+  ctx.clip();
+  ctx.translate(view.left, view.top);
+  if (jumpTrail) drawStroke(ctx, jumpTrail, view.width, view.height);
+  const x = (jumper.x * state.zoom + state.pan.x) * view.width;
+  const y = (jumper.y * state.zoom + state.pan.y) * view.height;
+  ctx.strokeStyle = "#2878eb55";
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  const floor = (ground * state.zoom + state.pan.y) * view.height;
+  ctx.moveTo(0, floor + 2);
+  ctx.lineTo(view.width, floor + 2);
+  ctx.stroke();
+  // An original 8 × 10 pixel sprite, facing its direction of travel.
+  const sprite = [
+    "..BBBB..",
+    ".BBBBBB.",
+    ".BLLWLB.",
+    ".BLLWLB.",
+    "..BBBB..",
+    ".DBBBBD.",
+    "D.BBBB.D",
+    "..DDDD..",
+    "..D..D..",
+    ".DD..DD.",
+  ];
+  const colors = { B: "#2878eb", D: "#16458d", L: "#8dceff", W: "#fff" };
+  const pixel = Math.max(2, Math.min(4, view.height / 140));
+  ctx.translate(Math.round(x), Math.round(y));
+  ctx.scale(jumper.facing, 1);
+  sprite.forEach((row, iy) =>
+    [...row].forEach((color, ix) => {
+      if (!colors[color]) return;
+      ctx.fillStyle = colors[color];
+      ctx.fillRect((ix - 4) * pixel, (iy - 10) * pixel, pixel, pixel);
+    }),
+  );
+  ctx.restore();
+}
+
+export function initSynthjump() {
+  document.querySelector("#synthjump").onclick = () => {
+    if (jumper.active) exitSynthjump();
+    else {
+      pause();
+      resetJumper();
+      if (!characterBrushes.has(state.tool)) {
+        state.tool = "Ink";
+        emit("tool");
+      }
+      jumper.active = true;
+      state.selected.clear();
+      change(() => {
+        state.project.paper.type = "Graph Paper";
+        state.project.paper.grid = true;
+      });
+      state.zoom = 1;
+      state.pan = { x: 0, y: 0 };
+      syncJumper();
+      emit("view");
+      document.querySelector("#status-message").textContent =
+        "Synthjump: ← → move · Space / ↑ jump · Play to hear your trail.";
+    }
+    document.querySelector("#drawing").focus();
+  };
+  document.querySelector("#synthjump-exit").onclick = exitSynthjump;
+  document.querySelector("#synthjump-play").onclick = async () => {
+    finishHop();
+    jumpHeld.clear();
+    jumper.y = ground;
+    jumper.vy = 0;
+    if (!state.playing) seekStart();
+    try {
+      await play();
+    } catch (error) {
+      document.querySelector("#status-message").textContent = error.message;
+    }
+  };
+  document.querySelectorAll("[data-jump-control]").forEach((button) => {
+    const key = button.dataset.jumpControl;
+    button.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      button.setPointerCapture(e.pointerId);
+      jumpHeld.add(key);
+      if (key === "ArrowUp") jump();
+    });
+    for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
+      button.addEventListener(event, () => jumpHeld.delete(key));
+    button.addEventListener("click", (e) => {
+      if (e.detail === 0) {
+        if (key === "ArrowUp") jump();
+        else
+          jumper.x = clamp(
+            jumper.x + (key === "ArrowLeft" ? -0.025 : 0.025),
+            0.02,
+            0.98,
+          );
+      }
+    });
+  });
+  document.addEventListener("keyup", (e) => jumpHeld.delete(e.key));
+  window.addEventListener("blur", () => {
+    jumpHeld.clear();
+    jumpLastTime = null;
+  });
+  document.addEventListener("visibilitychange", () => {
+    jumpHeld.clear();
+    jumpLastTime = null;
+  });
+  subscribe((type) => {
+    if (type === "load") {
+      jumper.active = false;
+      resetJumper();
+      syncJumper();
+    }
+    if (type === "tool" && jumper.active) {
+      if (!characterBrushes.has(state.tool)) exitSynthjump();
+      else {
+        // Preserve the old brush on the completed portion and continue the same
+        // airborne hop with the newly selected brush and sound settings.
+        if (jumpTrail) {
+          finishHop();
+          jumpTrail = makeTrail();
+        }
+        syncJumper();
+      }
+    }
+    if (type === "edit" && jumpTrail) {
+      jumpTrail = null;
+      jumper.y = ground;
+      jumper.vy = 0;
+    }
+    if (type === "play" && state.playing) {
+      finishHop();
+      jumpHeld.clear();
+      jumper.y = ground;
+      jumper.vy = 0;
+    }
+  });
 }

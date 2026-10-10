@@ -21,20 +21,15 @@ export const TOOLS = [
   "Echo Paint",
   "Rhythm Rain",
 ];
-export const COLORS = [
-  "#272b37",
-  "#7b8290",
-  "#f8f8ee",
-  "#e65661",
-  "#f3a24b",
-  "#efd462",
-  "#80b775",
-  "#43a5a0",
-  "#4b7ed5",
-  "#8581cb",
-  "#bc78b0",
-  "#9e7056",
-];
+// Brush identity determines paint color; existing project marks retain their colors.
+export const TOOL_COLORS = Object.freeze({
+  Pencil: "#e65661",
+  Ink: "#8581cb",
+  Watercolor: "#4b7ed5",
+  Marker: "#f3a24b",
+  Bass: "#80b775",
+  Drums: "#efd462",
+});
 export const SCALES = {
   "C major": [0, 2, 4, 5, 7, 9, 11],
   "A minor": [0, 2, 3, 5, 7, 8, 10],
@@ -66,6 +61,7 @@ export const defaults = () => ({
   root: 3,
   snap: true,
   loop: true,
+  melody: false,
   pingpong: false,
   pitchShift: 0,
   master: 0.65,
@@ -86,7 +82,7 @@ export const defaults = () => ({
 export const state = {
   project: defaults(),
   tool: "Ink",
-  color: COLORS[8],
+  color: TOOL_COLORS.Ink,
   layer: "layer-0",
   brush: {
     size: 9,
@@ -97,7 +93,7 @@ export const state = {
     // stacks. Subscribers are notified through one event channel whenever those values
     // change.
     volume: 0.65,
-    attack: 0.025,
+    attack: 0.012,
     release: 0.18,
     strength: 0.65,
     soundSmoothing: 0.65,
@@ -120,6 +116,7 @@ export function subscribe(fn) {
   return () => listeners.delete(fn);
 }
 export function emit(type = "change") {
+  if (TOOL_COLORS[state.tool]) state.color = TOOL_COLORS[state.tool];
   for (const fn of listeners) fn(type);
 }
 export function snapshot() {
@@ -201,7 +198,7 @@ export function newStroke(points, tool = state.tool) {
     id: uid(),
     points,
     brush: tool,
-    color: state.color,
+    color: TOOL_COLORS[tool] || TOOL_COLORS.Ink,
     size: state.brush.size,
     opacity: state.brush.opacity,
     layerId: state.layer,
@@ -268,12 +265,12 @@ export function pasteSelection(at = null) {
 export function demo() {
   const p = defaults();
   p.name = "Daydream";
-  const add = (points, brush, color, size, layer, opacity = 0.85) =>
+  const add = (points, brush, size, layer, opacity = 0.85) =>
     p.strokes.push({
       id: uid(),
       points: points.map(([x, y]) => ({ x, y, pressure: 0.65 })),
       brush,
-      color,
+      color: TOOL_COLORS[brush],
       size,
       opacity,
       layerId: `layer-${layer}`,
@@ -289,12 +286,12 @@ export function demo() {
       const t = i / (n - 1);
       return [x0 + t * (x1 - x0), y - Math.sin(t * Math.PI * 2) * amp];
     });
-  add(curve(0.06, 0.43, 0.32, 0.13), "Ink", COLORS[8], 10, 0);
-  add(curve(0.51, 0.91, 0.28, 0.105), "Ink", COLORS[8], 10, 0);
+  add(curve(0.06, 0.43, 0.32, 0.13), "Ink", 10, 0);
+  add(curve(0.51, 0.91, 0.28, 0.105), "Ink", 10, 0);
   // The demo layers melody, harmony, bass, and percussion marks. IndexedDB stores
-  // project snapshots separately from the last-opened-project setting.
-  add(curve(0.1, 0.46, 0.51, 0.065), "Watercolor", COLORS[10], 29, 1, 0.36);
-  add(curve(0.53, 0.88, 0.5, 0.07), "Watercolor", COLORS[10], 29, 1, 0.36);
+  // editable project snapshots.
+  add(curve(0.1, 0.46, 0.51, 0.065), "Watercolor", 29, 1, 0.36);
+  add(curve(0.53, 0.88, 0.5, 0.07), "Watercolor", 29, 1, 0.36);
   [
     [0.07, 0.2, 0.73],
     [0.29, 0.43, 0.67],
@@ -307,13 +304,13 @@ export function demo() {
         [b, y],
       ],
       "Bass",
-      COLORS[7],
+
       13,
       2,
     ),
   );
   for (let i = 0; i < 16; i++) {
-    add([[(i + 0.5) / 16, 0.86]], "Drums", COLORS[4], 10, 3);
+    add([[(i + 0.5) / 16, 0.86]], "Drums", 10, 3);
     p.strokes.at(-1).sound.drum =
       i % 4 === 0 ? "kick" : i % 4 === 2 ? "snare" : "closed hi-hat";
   }
@@ -327,7 +324,6 @@ function database() {
     const request = indexedDB.open("draw-synth", 1);
     request.onupgradeneeded = () => {
       request.result.createObjectStore("projects", { keyPath: "id" });
-      request.result.createObjectStore("settings");
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -350,7 +346,6 @@ export async function saveProject(project) {
   const copy = structuredClone(project);
   copy.updatedAt = Date.now();
   await transaction("projects", "readwrite", (s) => s.put(copy));
-  await transaction("settings", "readwrite", (s) => s.put(copy.id, "last"));
   return copy;
 }
 export function listProjects() {
@@ -358,12 +353,6 @@ export function listProjects() {
 }
 export function removeProject(id) {
   return transaction("projects", "readwrite", (s) => s.delete(id));
-}
-export async function restoreProject() {
-  const id = await transaction("settings", "readonly", (s) => s.get("last"));
-  if (!id) return null;
-  const p = await transaction("projects", "readonly", (s) => s.get(id));
-  return p ? validateProject(p) : null;
 }
 export function validateProject(data) {
   if (
@@ -455,6 +444,7 @@ export function validateProject(data) {
     ["brightness", 0, 1],
   ])
     p[key] = num(data[key], p[key], min, max);
+  p.melody = data.melody === true;
   p.pitchShift = Math.round(num(data.pitchShift, 0, -24, 24));
   if (
     data.rainClouds !== undefined &&

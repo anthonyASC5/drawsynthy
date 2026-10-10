@@ -140,59 +140,6 @@ label.check {
   gap: 3px;
   white-space: nowrap;
 }
-.desktop-header {
-  max-width: 1540px;
-  margin: auto;
-  min-height: 102px;
-  display: flex;
-  align-items: center;
-  gap: 28px;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  color: inherit;
-  font: bold 25px/0.95 var(--font-display);
-  letter-spacing: -1.6px;
-}
-.brand svg {
-  width: 38px;
-  height: 42px;
-  fill: none;
-  stroke: var(--color-accent);
-  stroke-width: 4;
-  shape-rendering: crispEdges;
-}
-.brand small {
-  font: 11px/1 var(--font-body);
-  display: block;
-  letter-spacing: 1.15px;
-  margin-top: 8px;
-}
-.desktop-note {
-  margin-left: 24px;
-  font: 14px var(--font-display);
-}
-.desktop-note span {
-  display: block;
-  font: 9px var(--font-body);
-  letter-spacing: 1.6px;
-  color: var(--color-muted);
-  margin-top: 7px;
-}
-.help-button {
-  margin-left: auto;
-  background: transparent;
-  box-shadow: none;
-  border: 0;
-  font: bold 16px var(--font-display);
-}
-.help-button span {
-  font: 12px var(--font-body);
-  margin-left: 6px;
-}
 .app-window {
   max-width: 1540px;
   margin: auto;
@@ -216,12 +163,6 @@ label.check {
 }
 .titlebar strong {
   font-weight: 700;
-}
-.title-caption {
-  margin-left: auto;
-  font-size: 9px;
-  letter-spacing: 1.7px;
-  opacity: 0.7;
 }
 .titlebar button,
 .panel-title button {
@@ -530,41 +471,6 @@ canvas {
   gap: 10px;
   padding: 12px 0 8px;
 }
-.current-color {
-  width: 39px;
-  height: 36px;
-  padding: 3px;
-  border: 1px solid var(--color-shadow);
-  box-shadow: inset 1px 1px var(--color-highlight);
-}
-.current-color input {
-  width: 100%;
-  height: 100%;
-}
-.colors {
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-.swatch {
-  width: 24px;
-  height: 26px;
-  min-height: 26px;
-  padding: 0;
-  background: var(--swatch);
-  box-shadow: none;
-  border-color: var(--color-highlight) var(--color-shadow) var(--color-shadow)
-    var(--color-highlight);
-}
-.swatch.active {
-  outline: 1px solid var(--color-ink);
-  outline-offset: 2px;
-}
-.color-note {
-  margin-left: auto;
-  font: 9px/1.5 var(--font-display);
-  color: var(--color-muted);
-}
 .drawing-tip {
   display: flex;
   gap: 7px;
@@ -739,19 +645,6 @@ summary > span {
   box-shadow: inset 0 1px var(--color-highlight);
   min-height: 99px;
 }
-.transport-buttons {
-  display: flex;
-  gap: 5px;
-}
-.transport-buttons button {
-  height: 42px;
-  width: 39px;
-  font-size: 17px;
-}
-.transport-buttons .large-play {
-  color: var(--color-green);
-  width: 47px;
-}
 .position-display {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -889,30 +782,6 @@ summary > span {
   padding: 3px;
   border: 0;
 }
-.desktop-footer {
-  max-width: 1540px;
-  margin: auto;
-  display: flex;
-  align-items: center;
-  gap: 32px;
-  font: 9px var(--font-display);
-  letter-spacing: 1px;
-  padding: 20px 0;
-  color: var(--color-muted);
-}
-.desktop-footer b {
-  color: var(--color-accent);
-  font-size: 15px;
-}
-.desktop-footer button {
-  margin-left: auto;
-  border: 0;
-  box-shadow: none;
-  background: none;
-  font: 10px var(--font-display);
-  padding: 0;
-  letter-spacing: 0;
-}
 #settings-mobile,
 #close-settings {
   display: none;
@@ -1027,29 +896,17 @@ progress {
   .audio-meter {
     display: none;
   }
-  .color-note,
+
   .stereo-label {
     display: none;
   }
-  .desktop-header {
-    min-height: 85px;
-  }
   .workspace {
     height: calc(100dvh - 285px);
-  }
-  .colors {
-    gap: 4px;
-  }
-  .swatch {
-    width: 22px;
   }
 }
 @media (max-width: 850px) {
   body {
     padding: 0 10px;
-  }
-  .desktop-note {
-    display: none;
   }
   .workspace {
     grid-template-columns: 82px minmax(0, 1fr);
@@ -1083,10 +940,6 @@ progress {
   .toolbar button {
     padding: 3px 7px;
   }
-  .title-caption {
-    margin-right: auto;
-    margin-left: auto;
-  }
   .transport {
     gap: 12px;
   }
@@ -1096,12 +949,6 @@ progress {
   .master-controls {
     min-width: 90px;
   }
-  .desktop-footer {
-    padding: 14px 0;
-  }
-  .desktop-footer > span:first-child {
-    display: none;
-  }
   .palette-footer {
     font-size: 10px;
   }
@@ -1110,37 +957,11 @@ progress {
   body {
     padding: 0 5px;
   }
-  .desktop-header {
-    min-height: 64px;
-    gap: 4px;
-  }
-  .brand {
-    font-size: 20px;
-  }
-  .brand svg {
-    width: 29px;
-    height: 32px;
-  }
-  .brand small {
-    font-size: 9px;
-    letter-spacing: 0.7px;
-    margin-top: 5px;
-  }
-  .help-button {
-    font-size: 18px;
-    padding: 6px;
-  }
-  .help-button span {
-    font-size: 10px;
-  }
   .app-window {
     padding: 3px;
   }
   .titlebar {
     font-size: 10px;
-  }
-  .title-caption {
-    display: none;
   }
   .titlebar strong {
     margin-right: auto;
@@ -1254,23 +1075,6 @@ progress {
     padding: 7px 1px 2px;
     gap: 8px;
   }
-  .current-color {
-    width: 30px;
-    height: 32px;
-    flex-shrink: 0;
-  }
-  .colors {
-    flex-wrap: nowrap;
-    gap: 4px;
-    overflow: auto;
-    padding: 3px;
-  }
-  .swatch {
-    width: 24px;
-    min-width: 24px;
-    height: 28px;
-    min-height: 28px;
-  }
   .drawing-tip {
     display: none;
   }
@@ -1280,15 +1084,6 @@ progress {
     gap: 8px;
     min-height: 95px;
     flex-wrap: wrap;
-  }
-  .transport-buttons {
-    gap: 4px;
-  }
-  .transport-buttons button,
-  .transport-buttons .large-play {
-    width: 33px;
-    height: 44px;
-    padding: 3px;
   }
   .position-display {
     min-width: 88px;
@@ -1362,16 +1157,6 @@ progress {
   .resize-grip {
     display: none;
   }
-  .desktop-footer {
-    padding: 7px 2px;
-    font-size: 8px;
-    gap: 4px;
-    letter-spacing: 0;
-  }
-  .desktop-footer button {
-    font-size: 8px;
-    min-height: 24px;
-  }
   .inspector {
     top: 70px;
     bottom: 20px;
@@ -1424,9 +1209,6 @@ progress {
 }
 /* Keep the complete transport visible beneath the touch canvas. */
 @media (max-width: 600px) {
-  .desktop-header {
-    min-height: 60px;
-  }
   .menubar button,
   .toolbar button {
     min-height: 44px;
@@ -1457,26 +1239,12 @@ progress {
   .color-strip {
     padding: 3px 1px 0;
   }
-  .current-color {
-    height: 44px;
-  }
-  .colors {
-    padding: 3px;
-  }
-  .swatch {
-    height: 44px;
-    min-height: 44px;
-    min-width: 30px;
-  }
   .transport {
     display: grid;
     grid-template-columns: 74px minmax(0, 1fr) 96px;
     gap: 6px 8px;
     min-height: 112px;
     padding: 6px 1px;
-  }
-  .transport-buttons {
-    grid-column: 1;
   }
   .position-display {
     grid-column: 2;
@@ -1523,16 +1291,6 @@ progress {
     margin: 0 0 0 auto;
     min-height: 30px;
   }
-  .desktop-footer {
-    min-height: 25px;
-    padding: 2px;
-  }
-  .desktop-footer > span {
-    font-size: 7px;
-  }
-  .desktop-footer button {
-    font-size: 7px;
-  }
   .statusbar #status-message {
     display: none;
   }
@@ -1547,9 +1305,6 @@ progress {
     top: 137px;
     left: 12px;
     width: min(225px, calc(100vw - 24px));
-  }
-  .help-button {
-    min-height: 44px;
   }
   .titlebar button {
     min-height: 24px;
@@ -1589,9 +1344,6 @@ progress {
   }
   .position-display b {
     font-size: 16px;
-  }
-  .desktop-footer > span {
-    max-width: 135px;
   }
 }
 .titlebar strong {
@@ -1635,7 +1387,6 @@ progress {
   .tempo-controls button,
   .loop-controls > select,
   .transport .loop-controls > .check,
-  .desktop-footer button,
   .inspector .control-top input {
     min-height: 44px;
   }
@@ -1648,9 +1399,6 @@ progress {
   }
   .inspector-scroll {
     max-height: calc(100% - 52px);
-  }
-  .desktop-footer {
-    min-height: 44px;
   }
 }
 input[type="number"] {
@@ -1769,14 +1517,9 @@ body {
   height: 19px;
   flex-shrink: 0;
 }
-.more-tools summary {
-  padding: 5px 2px;
-  font-size: 11px;
-}
 .palette-footer,
 .brush-preview,
 .drawing-tip,
-.color-note,
 .paper-badge,
 .document-tabs {
   display: none;
@@ -1805,24 +1548,6 @@ body {
   padding: 2px;
   gap: 5px;
   flex-shrink: 0;
-}
-.current-color {
-  width: 26px;
-  height: 24px;
-  flex-shrink: 0;
-}
-.colors {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  gap: 3px;
-  padding: 1px;
-}
-.swatch {
-  width: 24px;
-  min-width: 24px;
-  height: 22px;
-  min-height: 22px;
 }
 .inspector {
   display: block;
@@ -2009,9 +1734,6 @@ body {
     padding: 2px;
     gap: 2px;
   }
-  .more-tools summary {
-    font-size: 9px;
-  }
   .paper-toolbar {
     font-size: 9px;
     gap: 3px;
@@ -2095,12 +1817,18 @@ body {
   box-shadow: inset 1px 1px #fff;
   touch-action: none;
 }
-#rain-strip[hidden] { display: none; }
-#rain-strip.placing { cursor: crosshair; }
+#rain-strip[hidden] {
+  display: none;
+}
+#rain-strip.placing {
+  cursor: crosshair;
+}
 #rain-strip > span {
   display: block;
   padding: 12px 8px;
-  font: 10px Tahoma, sans-serif;
+  font:
+    10px Tahoma,
+    sans-serif;
   color: #555;
   pointer-events: none;
 }
@@ -2117,8 +1845,16 @@ body {
   cursor: ew-resize;
   touch-action: none;
 }
-.rain-cloud[aria-pressed="true"] { border: 1px dotted #163e9a; }
-.rain-cloud svg { width: 36px; height: 28px; fill: #fafaff; stroke: #355b91; stroke-width: 1.5; }
+.rain-cloud[aria-pressed="true"] {
+  border: 1px dotted #163e9a;
+}
+.rain-cloud svg {
+  width: 36px;
+  height: 28px;
+  fill: #fafaff;
+  stroke: #355b91;
+  stroke-width: 1.5;
+}
 @media (min-width: 1101px) {
   .palette {
     width: 120px;
@@ -2126,9 +1862,6 @@ body {
   .inspector {
     width: min(15vw, 210px);
   }
-}
-.more-tools summary {
-  white-space: nowrap;
 }
 .position-display {
   width: auto;
@@ -2267,4 +2000,71 @@ body {
   outline-offset: -2px;
   background: var(--color-selected);
   opacity: 0.5;
+}
+
+/* Synthjump keeps the same paper and transport, with touch controls beside the keys. */
+.synthjump-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-selected);
+  border-bottom: 1px solid var(--color-shadow);
+}
+.synthjump-controls[hidden] {
+  display: none;
+}
+.synthjump-controls > div {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.synthjump-controls [data-jump-control] {
+  min-width: 42px;
+  touch-action: none;
+}
+.synthjump-active .canvas-welcome,
+.synthjump-active .paper-badge {
+  display: none;
+}
+.synthjump-active #drawing {
+  cursor: default !important;
+}
+
+/* Instrument colors are a guide, with no separate color selection. */
+.tool-button[data-tool] svg {
+  stroke: var(--tool-color, var(--color-ink));
+}
+.tool-color-strip {
+  height: auto;
+  min-height: 30px;
+}
+.tool-color-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 2px 6px;
+}
+.tool-color-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+}
+.tool-color-key::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  background: var(--tool-color);
+  border: 1px solid var(--color-shadow);
+}
+.tool-color-key.active {
+  font-weight: bold;
+}
+@media (max-width: 600px) {
+  .tool-color-legend {
+    gap: 3px 8px;
+  }
 }

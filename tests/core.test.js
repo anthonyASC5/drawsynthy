@@ -4,6 +4,7 @@ import {
   defaults,
   demo,
   pitchAt,
+  pitches,
   state,
   change,
   undo,
@@ -25,15 +26,15 @@ import {
   playbackProject,
   copySelection,
   pasteSelection,
-} from "../js/state.js";
-import { compileNotes, timeline } from "../js/audio.js";
+} from "../state.js";
+import { compileNotes, timeline } from "../audio.js";
 import {
   encodeMIDI,
   encodeWAV,
   simplify,
   shapeStrokes,
   extractContours,
-} from "../js/canvas.js";
+} from "../canvas.js";
 
 // Composition, history, and export tests
 {
@@ -875,3 +876,109 @@ import {
     assert.deepEqual(midiNotes(encodeMIDI(p)), expected);
   });
 }
+
+// Optional melody arrangement
+function busyDrawing() {
+  const p = defaults();
+  p.bars = 1;
+  p.melody = true;
+  p.strokes = Array.from({ length: 24 }, (_, i) => ({
+    id: `busy-${i}`,
+    layerId: p.layers[i % 4].id,
+    brush: i % 5 === 0 ? "Bass" : "Ink",
+    color: "#8581cb",
+    size: 9,
+    opacity: 0.9,
+    sound: { volume: 0.65, hardness: 0.75, attack: 0.012, release: 0.7 },
+    points: Array.from({ length: 30 }, (_, j) => ({
+      x: j / 30,
+      y: 0.5 + Math.sin(j * 0.7 + i) * 0.45,
+      pressure: 0.65,
+    })),
+  }));
+  return p;
+}
+test("dense drawings become one scale-snapped lead and bass per eighth note", () => {
+  const p = busyDrawing(),
+    before = JSON.stringify(p),
+    notes = timeline(p);
+  assert.equal(p.melody, true);
+  assert.equal(notes.length, 16);
+  const scaleClasses = new Set(pitches(p).map((v) => v % 12));
+  for (const start of new Set(notes.map((n) => n.start))) {
+    const step = notes.filter((n) => n.start === start);
+    assert.equal(step.length, 2);
+    assert.equal(step.filter((n) => n.brush === "Bass").length, 1);
+  }
+  for (const n of notes) {
+    assert.equal((n.start * 2) % 1, 0);
+    assert.equal(n.curve.length, 1);
+    assert.ok(scaleClasses.has(n.pitch % 12));
+    assert.ok(n.duration + n.sound.release / (60 / p.bpm) < 0.5);
+  }
+  for (const bass of [false, true]) {
+    const ps = notes
+      .filter((n) => (n.brush === "Bass") === bass)
+      .map((n) => n.pitch);
+    assert.ok(Math.max(...ps) - Math.min(...ps) < 12);
+  }
+  assert.equal(JSON.stringify(p), before, "arranging never edits the drawing");
+});
+test("melody is repeatable, saved, transposable, and can restore raw playback", () => {
+  const p = busyDrawing(),
+    notes = timeline(p);
+  assert.deepEqual(timeline(structuredClone(p)), notes);
+  const musical = (ns) =>
+    ns.map(({ start, duration, pitch, brush }) => ({
+      start,
+      duration,
+      pitch,
+      brush,
+    }));
+  assert.deepEqual(musical(timeline(validateProject(p))), musical(notes));
+  p.pitchShift = 12;
+  assert.deepEqual(
+    timeline(p).map((n) => n.pitch),
+    notes.map((n) => n.pitch + 12),
+  );
+  p.melody = false;
+  assert.equal(validateProject(p).melody, false);
+  assert.ok(timeline(p).length > notes.length);
+  assert.ok(timeline(p).some((n) => n.curve.length > 1));
+});
+test("mute, solo, empty space, and ping-pong remain respected", () => {
+  const p = busyDrawing();
+  p.layers.forEach((l) => (l.mute = true));
+  assert.deepEqual(timeline(p), []);
+  p.layers[1].mute = false;
+  p.layers[1].solo = true;
+  assert.ok(timeline(p).every((n) => n.layerId === p.layers[1].id));
+  p.strokes.forEach((s) => (s.points = [{ x: 0.5, y: 0.5, pressure: 0.65 }]));
+  assert.equal(timeline(p).length, 2);
+  p.pingpong = true;
+  assert.equal(timeline(p).length, 4);
+  assert.ok(timeline(p).every((n) => n.start < 8));
+});
+test("dense drums deduplicate kit hits on sixteenths", () => {
+  const p = busyDrawing();
+  p.strokes.forEach((s, i) => {
+    s.brush = "Drums";
+    s.sound.drum = i % 2 ? "kick" : "snare";
+    s.points = [{ x: 0.12, y: 0.5, pressure: 0.65 }];
+  });
+  const notes = timeline(p);
+  assert.equal(notes.length, 2);
+  assert.ok(notes.every((n) => n.start === 0.5));
+});
+
+test("Melody defaults off and preserves simultaneous drawing voices", () => {
+  assert.equal(defaults().melody, false);
+  const p = busyDrawing();
+  delete p.melody;
+  assert.equal(validateProject(p).melody, false);
+  const notes = timeline(validateProject(p));
+  assert.ok(
+    notes.filter((n) => n.start === 0 && n.brush !== "Bass").length > 1,
+  );
+  assert.ok(notes.some((n) => n.curve.length > 1));
+});

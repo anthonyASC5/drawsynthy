@@ -2,6 +2,7 @@
 // exports consume the same deterministic note representation.
 import {
   pitchAt,
+  pitches,
   clamp,
   state,
   emit,
@@ -225,7 +226,10 @@ export function compileRainNotes(project) {
 export function timeline(project) {
   const notes = compileNotes(project, false);
   if (!project.pingpong)
-    return arrangeNotes([...notes, ...compileRainNotes(project)]);
+    return arrangeMelody(
+      arrangeNotes([...notes, ...compileRainNotes(project)]),
+      project,
+    );
   const beats = project.bars * 4;
   const result = [];
   for (const n of notes) {
@@ -262,7 +266,124 @@ export function timeline(project) {
       curve: reverseCurve,
     });
   }
-  return arrangeNotes([...result, ...compileRainNotes(project)]);
+  return arrangeMelody(
+    arrangeNotes([...result, ...compileRainNotes(project)]),
+    project,
+  );
+}
+// Turn busy artwork into a rhythmic lead and bass rather than a pile of voices.
+// The original vectors remain editable; live playback, WAV, and MIDI share this pass.
+function arrangeMelody(notes, project) {
+  if (project.melody !== true) return notes;
+  const length = project.bars * 4 * (project.pingpong ? 2 : 1);
+  const result = [];
+  const scale = pitches(project);
+  const scaleClasses = new Set(scale.map((pitch) => pitch % 12));
+  const release = Math.min(0.04, (60 / project.bpm) * 0.08);
+  function sample(note, beat) {
+    const curve = note.curve;
+    const local = Math.max(0, beat - note.start);
+    let low = 0,
+      high = curve.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (curve[middle].beat <= local) low = middle;
+      else high = middle - 1;
+    }
+    const a = curve[low],
+      b = curve[Math.min(low + 1, curve.length - 1)];
+    return (
+      a.pitch +
+      (b.pitch - a.pitch) * clamp((local - a.beat) / (b.beat - a.beat || 1))
+    );
+  }
+  for (const bass of [false, true]) {
+    const pool = notes.filter(
+      (n) => n.brush !== "Drums" && (n.brush === "Bass") === bass,
+    );
+    let previous = null,
+      previousId = null;
+    for (let start = 0; start < length; start += 0.5) {
+      let chosen = null,
+        best = -Infinity,
+        chosenPitch = 0;
+      for (const note of pool) {
+        if (note.start >= start + 0.5 || note.start + note.duration <= start)
+          continue;
+        const drawn = sample(note, Math.max(note.start, start + 0.25));
+        // Preserve the drawing's scale degree and transposition within one octave.
+        const center =
+          scale[Math.floor(scale.length / 2)] +
+          (note.pitchShift || 0) -
+          (bass ? 24 : 0);
+        const bottom = Math.round(center) - 6;
+        let pitch = Math.round(drawn);
+        pitch = bottom + ((((pitch - bottom) % 12) + 12) % 12);
+        if (project.snap) {
+          const allowed = Array.from(
+            { length: 12 },
+            (_, i) => bottom + i,
+          ).filter(
+            (p) =>
+              p >= 0 &&
+              p <= 127 &&
+              scaleClasses.has((((p - (note.pitchShift || 0)) % 12) + 12) % 12),
+          );
+          if (allowed.length)
+            pitch = allowed.reduce((best, p) =>
+              Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best,
+            );
+        }
+        pitch = clamp(pitch, 0, 127);
+        const score =
+          note.velocity +
+          (note.id === previousId ? 0.12 : 0) -
+          (previous === null ? 0 : Math.abs(pitch - previous) * 0.01);
+        if (score > best) {
+          best = score;
+          chosen = note;
+          chosenPitch = pitch;
+        }
+      }
+      if (!chosen) {
+        previous = null;
+        previousId = null;
+        continue;
+      }
+      previous = chosenPitch;
+      previousId = chosen.id;
+      result.push({
+        ...chosen,
+        id: `melody:${bass ? "bass" : "lead"}:${start}:${chosen.id}`,
+        start,
+        duration: Math.min(0.4, length - start),
+        extent: 0,
+        pitch: chosenPitch,
+        curve: [{ beat: 0, pitch: chosenPitch }],
+        velocity: Math.min(chosen.velocity, bass ? 0.55 : 0.5),
+        sound: {
+          ...chosen.sound,
+          attack: Math.min(chosen.sound.attack ?? 0.012, 0.025),
+          release,
+        },
+      });
+    }
+  }
+  // Keep percussion, but merge repeated hits of the same kit piece on a sixteenth.
+  const drums = new Map();
+  for (const note of notes.filter((n) => n.brush === "Drums")) {
+    const start = Math.min(length - 0.25, Math.round(note.start * 4) / 4);
+    const key = `${start}:${note.sound.drum}`;
+    if ((drums.get(key)?.velocity ?? -1) < note.velocity)
+      drums.set(key, {
+        ...note,
+        id: `melody:drum:${key}`,
+        start,
+        duration: 0.08,
+        extent: 0,
+      });
+  }
+  return [...result, ...drums.values()].sort((a, b) => a.start - b.start);
 }
 function hash(s) {
   let h = 2166136261;
@@ -279,6 +400,12 @@ function rng(seed) {
 // MIDI pitches become oscillator frequencies. The shared audio graph provides filtering,
 // compression, master gain, delay, reverb, and an analyser for metering.
 const frequency = (m) => 440 * 2 ** ((m - 69) / 12);
+// A shared, deterministic soft-clipping curve gives Ink its retro grit in both
+// live playback and offline WAV rendering.
+const inkDrive = Float32Array.from(
+  { length: 2048 },
+  (_, i) => Math.tanh(2.8 * ((2 * i) / 2047 - 1)) / Math.tanh(2.8),
+);
 export function createGraph(context, p) {
   const input = context.createGain(),
     master = context.createGain(),
@@ -302,7 +429,7 @@ export function createGraph(context, p) {
     wet = context.createGain();
   delay.delayTime.value = (60 / p.bpm) * 0.75;
   feedback.gain.value = 0.25;
-  wet.gain.value = p.delay * 0.38;
+  wet.gain.value = p.delay * 0.38 * (p.melody ? 0.45 : 1);
   filter.connect(delay);
   delay.connect(feedback);
   feedback.connect(delay);
@@ -322,7 +449,7 @@ export function createGraph(context, p) {
       data[i] = (random() * 2 - 1) * Math.pow(1 - i / data.length, 3);
   }
   convolver.buffer = impulse;
-  reverb.gain.value = p.reverb * 0.45;
+  reverb.gain.value = p.reverb * 0.45 * (p.melody ? 0.5 : 1);
   // Effects reconnect through the compressor, and graph parameters can change smoothly
   // during playback. Explicit disconnection releases every node when a graph is retired.
   filter.connect(convolver);
@@ -341,8 +468,12 @@ export function createGraph(context, p) {
       master.gain.setTargetAtTime(p.master * 0.55, t, 0.02);
       filter.frequency.setTargetAtTime(500 + p.brightness * 14500, t, 0.025);
       delay.delayTime.setTargetAtTime((60 / p.bpm) * 0.75, t, 0.03);
-      wet.gain.setTargetAtTime(p.delay * 0.38, t, 0.03);
-      reverb.gain.setTargetAtTime(p.reverb * 0.45, t, 0.03);
+      wet.gain.setTargetAtTime(p.delay * 0.38 * (p.melody ? 0.45 : 1), t, 0.03);
+      reverb.gain.setTargetAtTime(
+        p.reverb * 0.45 * (p.melody ? 0.5 : 1),
+        t,
+        0.03,
+      );
     },
     disconnect() {
       input.disconnect();
@@ -363,7 +494,8 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
     remaining = Math.max(0.008, (n.duration - offset) * secondsPerBeat),
     sound = n.sound || {},
     drum = n.brush === "Drums",
-    pencil = n.brush === "Pencil";
+    pencil = n.brush === "Pencil",
+    ink = n.brush === "Ink";
   const shiftRatio = 2 ** ((n.pitchShift || 0) / 12);
   const basePitch = clamp(n.pitch - (n.pitchShift || 0), 0, 127);
   let duration = remaining;
@@ -377,7 +509,19 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
     filter = context.createBiquadFilter();
   filter.type = "lowpass";
   filter.frequency.value = 350 + n.brightness * 10500;
-  filter.Q.value = 0.4;
+  filter.Q.value = ink ? 1.15 : 0.4;
+  if (ink) {
+    const cutoff = Math.min(
+      context.sampleRate * 0.45,
+      900 + n.brightness * 5500,
+    );
+    filter.frequency.setValueAtTime(cutoff, start);
+    filter.frequency.setTargetAtTime(
+      Math.max(450, cutoff * 0.42),
+      start + 0.018,
+      0.12,
+    );
+  }
   filter.connect(gain);
   gain.connect(graph.input);
   const attack = drum
@@ -388,7 +532,8 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
           0.008,
           sound.attack ?? (n.brush === "Watercolor" ? 0.2 : 0.025),
         );
-  const level = n.velocity * (n.brush === "Watercolor" ? 0.5 : 0.28);
+  const level =
+    n.velocity * (n.brush === "Watercolor" ? 0.5 : ink ? 0.24 : 0.28);
   gain.gain.setValueAtTime(0, start);
   gain.gain.linearRampToValueAtTime(
     level,
@@ -401,8 +546,18 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
     );
   } else gain.gain.setValueAtTime(level, start + duration);
   gain.gain.linearRampToValueAtTime(0, start + duration + release);
-  const nodes = [];
+  const nodes = [],
+    auxiliaries = [];
   let source;
+  let voiceInput = filter;
+  if (ink) {
+    const drive = context.createWaveShaper();
+    drive.curve = inkDrive;
+    drive.oversample = "2x";
+    drive.connect(filter);
+    voiceInput = drive;
+    auxiliaries.push(drive);
+  }
   const noise = drum && sound.drum !== "kick";
   if (noise) {
     source = context.createBufferSource();
@@ -447,6 +602,27 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
         start + 0.17,
       );
     } else {
+      // Two slightly detuned saws and a quiet square sub make a thick, buzzy
+      // lead. All oscillators follow the same pitch curve, including after seeking.
+      const oscillators = [source];
+      if (ink) {
+        source.detune.value = -7;
+        const second = context.createOscillator(),
+          sub = context.createOscillator();
+        second.type = "sawtooth";
+        second.detune.value = 7;
+        sub.type = "square";
+        sub.detune.value = -1200;
+        oscillators.push(second, sub);
+        oscillators.forEach((oscillator, i) => {
+          const mix = context.createGain();
+          mix.gain.value = i === 2 ? 0.16 : 0.42;
+          oscillator.connect(mix);
+          mix.connect(voiceInput);
+          auxiliaries.push(mix);
+        });
+        nodes.push(second, sub);
+      }
       const curve = n.curve || [{ beat: 0, pitch: n.pitch }];
       let initial = curve[0].pitch;
       for (let i = 0; i < curve.length; i++) {
@@ -460,25 +636,29 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
           break;
         }
       }
-      source.frequency.setValueAtTime(frequency(initial), start);
-      for (const p of curve)
-        if (p.beat > offset && p.beat <= n.duration)
-          // Frequency automation follows the remaining pitch curve after a seek.
-          // Finished live voices disconnect, and stopped voices fade briefly to prevent
-          // clicks.
-          source.frequency.linearRampToValueAtTime(
-            frequency(p.pitch),
-            start + (p.beat - offset) * secondsPerBeat,
-          );
+      for (const oscillator of oscillators) {
+        oscillator.frequency.setValueAtTime(frequency(initial), start);
+        for (const p of curve)
+          if (p.beat > offset && p.beat <= n.duration)
+            // Frequency automation follows the remaining pitch curve after a seek.
+            // Finished live voices disconnect, and stopped voices fade briefly to prevent
+            // clicks.
+            oscillator.frequency.linearRampToValueAtTime(
+              frequency(p.pitch),
+              start + (p.beat - offset) * secondsPerBeat,
+            );
+      }
     }
   }
-  source.connect(filter);
-  source.start(start);
-  source.stop(start + duration + release + 0.025);
+  if (!ink) source.connect(filter);
   nodes.push(source);
+  for (const oscillator of nodes) {
+    oscillator.start(start);
+    oscillator.stop(start + duration + release + 0.025);
+  }
   source.onended = () => {
     if (typeof context.startRendering === "function") return;
-    source.disconnect();
+    for (const node of [...nodes, ...auxiliaries]) node.disconnect();
     filter.disconnect();
     gain.disconnect();
   };
@@ -488,7 +668,7 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
       try {
         gain.gain.cancelScheduledValues(t);
         gain.gain.setTargetAtTime(0, t, 0.009);
-        source.stop(t + 0.05);
+        for (const node of nodes) node.stop(t + 0.05);
       } catch {}
     },
   };
@@ -534,6 +714,7 @@ function compositionKey() {
     strokes: p.strokes,
     rainClouds: p.rainClouds,
     loop: p.loop,
+    melody: p.melody,
     layers: p.layers.map(({ id, mute, solo, volume }) => ({
       id,
       mute,
@@ -549,11 +730,6 @@ function compositionKey() {
     pitchShift: p.pitchShift || 0,
     pingpong: p.pingpong,
   });
-}
-export function audioContext() {
-  // The transport derives beats from AudioContext time rather than animation frames.
-  // Rebasing recompiles edited music and resets scheduling at the current beat.
-  return context;
 }
 export function transportBeat() {
   return state.playing && context

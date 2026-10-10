@@ -3,7 +3,7 @@
 import {
   state,
   TOOLS,
-  COLORS,
+  TOOL_COLORS,
   SCALES,
   defaults,
   demo,
@@ -38,6 +38,8 @@ import {
   canPasteSelection,
 } from "./state.js";
 import {
+  initSynthjump,
+  synthjumpKey,
   initSeeking,
   processImage,
   initCanvas,
@@ -104,7 +106,7 @@ const hints = {
     "Select marks to repeat them with delay, fade, and pitch changes.",
   "Rhythm Rain": "Place clouds above your marks. Press Play to hear the rain.",
   Pencil: "Small lines, little plucks. Try a constellation of notes.",
-  Ink: "Draw a melody. Up is higher, right is later.",
+  Ink: "Draw a buzzy retro lead. Up is higher, right is later.",
   Watercolor: "Wash in a soft, slow pad. Overlap marks for a chord.",
   Marker: "Broad strokes make warm, sustained tones.",
   Bass: "Low-end color. The next bass mark takes over the note.",
@@ -227,7 +229,7 @@ function selectTool(tool) {
   if (tool === "Musical Symmetry" && !continuing) startSymmetry();
   const preset = {
     Pencil: [3, 0.008, 0.12],
-    Ink: [9, 0.025, 0.18],
+    Ink: [9, 0.012, 0.18],
     Watercolor: [29, 0.25, 0.65],
     Marker: [20, 0.05, 0.25],
     Bass: [14, 0.02, 0.16],
@@ -246,7 +248,7 @@ function selectTool(tool) {
 function toolLabel(name) {
   const sounds = {
     Pencil: "soft pluck",
-    Ink: "synth lead",
+    Ink: "retro rage synth",
     Watercolor: "soft pad",
     Marker: "warm tone",
     Bass: "low synth",
@@ -276,6 +278,8 @@ function renderTools() {
       "Rhythm Rain":
         '<path d="M6 15C0 15 0 7 6 7C6 0 17 0 18 7C25 5 26 15 20 15ZM7 18l-2 4m9-4-2 4m9-4-2 4"/>',
     };
+    if (TOOL_COLORS[name])
+      b.style.setProperty("--tool-color", TOOL_COLORS[name]);
     b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[i]}"/>`}</svg><span>${label}</span>`;
   });
 }
@@ -698,6 +702,12 @@ function syncPitch() {
 function soundSettings() {
   const p = $("#sound-settings");
   p.replaceChildren();
+  checkbox(
+    p,
+    "Melody: arrange drawing into notes",
+    state.project.melody === true,
+    (v) => projectSet("melody", v),
+  );
   pitchControl(p);
   select(p, "Scale", Object.keys(SCALES), state.project.scale, (v) =>
     projectSet("scale", v),
@@ -778,7 +788,15 @@ function renderLayers() {
     const row = el("div", {
       class: "layer" + (layer.id === state.layer ? " active" : ""),
     });
-    row.style.setProperty("--swatch", COLORS[[8, 10, 7, 4][i % 4]]);
+    row.style.setProperty(
+      "--swatch",
+      [
+        TOOL_COLORS.Ink,
+        TOOL_COLORS.Watercolor,
+        TOOL_COLORS.Bass,
+        TOOL_COLORS.Drums,
+      ][i % 4],
+    );
     button(
       row,
       layer.visible ? "◉" : "○",
@@ -924,10 +942,11 @@ function sync(type) {
   $("#master-number").value = Math.round(p.master * 100);
   $("#master-value").textContent = Math.round(p.master * 100) + "%";
   $("#loop-button").setAttribute("aria-pressed", p.loop);
+  $("#melody-button").setAttribute("aria-pressed", p.melody === true);
   $("#status-tool").textContent = "✎ " + state.tool;
   $("#status-size").textContent = state.brush.size + " px";
   $("#status-zoom").textContent = Math.round(state.zoom * 100) + "%";
-  // State synchronization updates toolbar selection, swatches, brush preview, and
+  // State synchronization updates toolbar selection, the color legend, brush preview, and
   // Undo/Redo availability so separate controls reflect the same project.
   $("#zoom-reset").textContent = Math.round(state.zoom * 100) + "%";
   $("#drawing-tip").textContent = hints[state.tool];
@@ -935,15 +954,14 @@ function sync(type) {
   $("#brush-preview-dot").style.width = state.brush.size + "px";
   $("#brush-preview-dot").style.height = state.brush.size + "px";
   $("#brush-preview-dot").style.background = state.color;
-  $("#custom-color").value = state.color;
+
   $("#drawing").style.cursor = state.tool === "Hand" ? "grab" : "crosshair";
   document.querySelectorAll(".tool-button").forEach((b, i) => {
     b.classList.toggle("active", b.dataset.tool === state.tool);
     b.setAttribute("aria-pressed", b.dataset.tool === state.tool);
   });
-  document.querySelectorAll(".swatch").forEach((b) => {
-    b.classList.toggle("active", b.dataset.color === state.color);
-    b.setAttribute("aria-pressed", b.dataset.color === state.color);
+  document.querySelectorAll(".tool-color-key").forEach((item) => {
+    item.classList.toggle("active", item.dataset.brush === state.tool);
   });
   document
     .querySelectorAll("[data-action=undo]")
@@ -1345,11 +1363,11 @@ function imageDialog() {
         setZoom(1);
         selectTool("Select");
         closeDialog();
-        // After import, the new marks are selected for movement or recoloring.
+        // After import, the new marks are selected for movement and resizing.
         // Unsupported image types and processing failures produce useful status
         // messages.
         message(
-          "Image imported. Select to move or resize; choose a color to recolor.",
+          "Image imported. Select to move or resize. Ink contours use purple.",
         );
       },
       { disabled: "" },
@@ -1369,16 +1387,6 @@ function imageDialog() {
       }
     });
   });
-}
-function paintColor(color) {
-  state.color = color;
-  if (state.tool === "Select" && state.selected.size)
-    change(() => {
-      state.project.strokes
-        .filter((s) => state.selected.has(s.id))
-        .forEach((s) => (s.color = color));
-    });
-  emit("brush");
 }
 function helpDialog() {
   showDialog("Welcome to Draw Synth", (body) => {
@@ -1453,6 +1461,7 @@ const actions = {
   pause,
   stop,
   loop: () => projectSet("loop", !state.project.loop),
+  melody: () => projectSet("melody", state.project.melody !== true),
   export: exportDialog,
   import: () => $("#file-input").click(),
   // Project duplication gets a new identity; deletion coordinates pending saves.
@@ -1702,8 +1711,7 @@ function bind() {
   $("#toggle-tools").onclick = () => togglePanel("palette", "toggle-tools");
   $("#close-tools").onclick = $("#toggle-tools").onclick;
   $("#full-canvas").onclick = () => fullCanvas(true);
-  // Binding connects playback, dialogs, panel toggles, and fullscreen controls. Color
-  // buttons reuse the same recoloring path as the custom-color input.
+  // Binding connects playback, dialogs, panel toggles, and fullscreen controls.
   $("#exit-full-canvas").onclick = () => fullCanvas(false);
   $("#canvas-play").onclick = guard(() => {
     if (!state.playing) return play();
@@ -1738,27 +1746,15 @@ function bind() {
   $("#zoom-in").onclick = actions.zoomIn;
   $("#zoom-out").onclick = actions.zoomOut;
   $("#zoom-reset").onclick = actions.zoomReset;
-  COLORS.forEach((color, i) => {
-    const b = button(
-      $("#colors"),
-      "",
-      () => {
-        paintColor(color);
-      },
-      {
-        class: "swatch",
-        "aria-label": `Paint ${["charcoal", "gray", "white", "coral", "orange", "yellow", "green", "teal", "blue", "violet", "pink", "brown"][i]}`,
-        // Palette changes update the selected marks or current paint color. Tempo, loop
-        // length, ping-pong, metronome, and master-volume inputs write project settings.
-        "aria-pressed": state.color === color,
-      },
+  for (const [tool, color] of Object.entries(TOOL_COLORS)) {
+    const item = el(
+      "span",
+      { class: "tool-color-key", "data-brush": tool },
+      tool,
     );
-    b.style.setProperty("--swatch", color);
-    b.dataset.color = color;
-  });
-  $("#custom-color").oninput = (e) => {
-    paintColor(e.target.value);
-  };
+    item.style.setProperty("--tool-color", color);
+    $("#tool-color-legend").append(item);
+  }
   for (const id of ["bpm", "bpm-range"])
     $("#" + id).oninput = (e) => {
       if (Number.isFinite(e.target.valueAsNumber))
@@ -1832,6 +1828,7 @@ function bind() {
   document.addEventListener(
     "keydown",
     guard(async (e) => {
+      if (synthjumpKey(e)) return;
       if (e.key === "Escape") {
         closeMenus();
         cancelAction();
@@ -1902,6 +1899,7 @@ async function init() {
   bind();
   initCanvas();
   initTools();
+  initSynthjump();
   selectionMenu();
   initSeeking();
   initTransport();

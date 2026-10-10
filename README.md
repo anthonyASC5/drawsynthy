@@ -6,13 +6,13 @@ A retro paint program that turns vector drawings into looping music. Built with 
 
 From this directory, run `npm start` (or `python3 -m http.server 8080`), then open **http://localhost:8080**. ES modules require a server; opening `index.html` as a `file://` URL will not work. To deploy, publish this directory from a GitHub Pages branch; all paths are relative and no build is required.
 
-The app uses four JavaScript modules: `js/app.js` for the interface, `js/state.js` for project state, storage, musical transforms, and rain geometry, `js/audio.js` for synthesis and playback, and `js/canvas.js` for rendering, drawing tools, image import, seeking, and file exports. All styles and CSS variables live in `styles.css`. Main JavaScript files include functionality comments at intervals of roughly 50 lines.
+The app uses four JavaScript modules: `app.js` for the interface, `state.js` for project state, storage, musical transforms, and rain geometry, `audio.js` for synthesis and playback, and `canvas.js` for rendering, drawing tools, Synthjump, image import, seeking, and file exports. All styles and CSS variables live in `styles.css`.
 
 ## Play and draw
 
-Every visit or refresh opens a new blank drawing with default project settings. Add your own marks, then press Play. Open saved drawings through File → Open. New also creates a blank drawing. Horizontal position is time; vertical position is pitch. Longer strokes sustain and glide, thicker strokes play louder, and opacity adds brightness. The loop is deterministic, including seeded noise and the reverb impulse.
+Every visit or refresh opens a new blank drawing with default project settings. Add your own marks, then press Play. Open saved drawings through File → Open. New also creates a blank drawing. Horizontal position is time; vertical position is pitch. **Melody** is optional and off by default: drawings become one lead and one bass note per eighth-note step, with compact pitch ranges, short releases, and deduplicated drum hits. This keeps dense scribbles musical. Enable Melody in the toolbar or Sound settings when you want that arrangement. Both modes use thicker strokes for louder notes and opacity for brightness, and share playback, WAV, and MIDI output. Melody is saved with the project. The loop is deterministic, including seeded noise and the reverb impulse.
 
-- **Pencil:** quiet sine pluck. **Ink:** bright sawtooth lead.
+- **Pencil:** quiet sine pluck. **Ink:** retro rage synth with detuned saws, a square sub, soft distortion, and a resonant filter sweep.
 - **Watercolor:** translucent soft pad. **Marker:** warm triangle sustain.
 - **Bass:** low sawtooth, monophonic across bass marks.
 - **Drums:** kick, snare, closed or open hi-hat. Drag to place a trail.
@@ -24,6 +24,14 @@ Every visit or refresh opens a new blank drawing with default project settings. 
 Tool properties expose size, opacity, hardness, smoothing, volume, attack, and release where relevant. Expand “Brush & envelope” for advanced settings. Sound properties contain scale, range, effects, and metronome settings. Sliders have adjacent editable number fields. Paper and grid settings never modify notes.
 
 Click a layer name to paint on it. Eye controls only visibility; M mutes, S solos. “Edit layer” renames, adjusts volume, reorders, duplicates, or deletes it. Up to eight layers. Drag the blue Tools or Properties title bar to float that panel on desktop; double-click the title bar to dock again. On smaller screens use the title-bar settings button.
+
+## Synthjump
+
+Click **synthjump** beside the paper controls to turn the canvas into a graph-paper playground. Use **Left/Right** to move and **Space/Up** to hop high. Each hop uses the selected Pencil, Ink, Watercolor, Marker, Bass, or Drums brush, including its fixed instrument color, size, opacity, and sound settings. Change brushes while playing to change the character’s trail; switching mid-hop keeps each portion’s original instrument. Touch controls let you hold a direction and tap Jump. **Play pattern** listens from the beginning and pauses the character; press it again to pause playback and keep drawing. **Done**, Escape, or choosing an editing tool leaves the game with your trails intact. Completed hops support Undo/Redo, saving, and all exports.
+
+The Synthjump checks are included in `npm run test:browser`.
+
+Brush colors follow their instruments: **Pencil red, Ink purple, Watercolor blue, Marker orange, Bass green, and Drums yellow**. The guide below the canvas shows the mapping. Existing saved marks keep their colors.
 
 ## Musical tools
 
@@ -39,7 +47,7 @@ Rain droplets fall during playback and freeze on pause. Each droplet hits only t
 
 Use **Import Image** beside How to play to choose a PNG, JPG, or WebP (up to 30 MB). Detail controls contour resolution and simplification; Edge Threshold selects grayscale boundaries, and Invert reverses light and dark before tracing. Preview, then Import to create editable Ink lines on a new **Image** layer. The image fits the canvas without stretching. Processing stays in the browser; images are never uploaded. Imports require a free layer and stay within the project's stroke and point limits.
 
-Imported lines use the same timing, pitch, selection and erase behavior as drawn lines. Select lines and choose a palette or custom color to recolor them. Import and recoloring support Undo.
+Imported lines use the same timing, pitch, selection and erase behavior as drawn lines. Imported Ink contours are purple. Import supports Undo.
 
 Open **Properties → Sound settings → Pitch** to transpose the composition from −24 to +24 semitones. Drag the knob, use arrow keys for single semitones or Page Up/Down for octaves, and double-click to reset to zero. Live playback, WAV, and MIDI use the same transposition, with notes clamped to MIDI pitches 0–127. On MIDI's percussion channel, transposition changes drum note numbers. Pitch is saved with the project; older projects default to zero.
 
@@ -85,6 +93,6 @@ Modern Chrome, Edge, Firefox, and Safari are recommended. Browser audio starts o
 
 ## Verification
 
-`npm test` runs all 41 unit tests from `tests/core.test.js`, covering composition, MIDI/WAV encoding, validation, geometry, image tracing, and musical tools. `npm ci` installs the locked development-only tools. With the local server running, `npm run test:browser` runs `tests/browser.mjs`, which groups the existing drawing/export, image/pitch, and musical-tool browser checks (run `npx playwright install chromium` once if needed). The app itself has no package dependencies.
+`npm test` runs all 46 unit tests from `tests/core.test.js`, covering composition, MIDI/WAV encoding, validation, geometry, image tracing, musical tools, and optional melody arrangement. `npm ci` installs the locked development-only tools. With the local server running, `npm run test:browser` runs `tests/browser.mjs`, which groups the existing drawing/export, image/pitch, musical-tool, and Synthjump browser checks (run `npx playwright install chromium` once if needed). The app itself has no package dependencies.
 
 Installed dependencies (`node_modules/`), generated browser artifacts (`tests/artifacts/`), and macOS metadata are ignored by Git. Dependencies stay available locally for development; regenerate them with `npm ci` after a fresh checkout. Browser artifacts are disposable and recreated by the browser suite.
