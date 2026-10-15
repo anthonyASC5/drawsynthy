@@ -11,6 +11,7 @@ export const TOOLS = [
   "Marker",
   "Bass",
   "Drums",
+  "Vox",
   "Eraser",
   "Smudge",
   "Select",
@@ -29,6 +30,7 @@ export const TOOL_COLORS = Object.freeze({
   Marker: "#f3a24b",
   Bass: "#80b775",
   Drums: "#efd462",
+  Vox: "#c47caa",
 });
 export const SCALES = {
   "C major": [0, 2, 4, 5, 7, 9, 11],
@@ -99,6 +101,12 @@ export const state = {
     soundSmoothing: 0.65,
     drum: "kick",
     shape: "Wave",
+    vowel: "Ooh",
+    formant: 1,
+    vocalDepth: 0.7,
+    vibratoAmount: 0.15,
+    vibratoSpeed: 5,
+    stereoDelay: 0.15,
   },
   selected: new Set(),
   selectedCloud: null,
@@ -204,6 +212,30 @@ export function newStroke(points, tool = state.tool) {
     layerId: state.layer,
     sound: { ...state.brush },
   };
+}
+// Vox Properties edits the selected vocal marks, or the whole vocal instrument
+// when no Vox marks are selected. Project edits notify transport and autosave.
+export function setVoxSound(key, value) {
+  const keys = [
+    "vowel",
+    "formant",
+    "vocalDepth",
+    "vibratoAmount",
+    "vibratoSpeed",
+    "attack",
+    "release",
+    "volume",
+    "stereoDelay",
+  ];
+  if (!keys.includes(key)) return;
+  state.brush[key] = value;
+  const vox = state.project.strokes.filter((s) => s.brush === "Vox");
+  const selected = vox.filter((s) => state.selected.has(s.id));
+  change(() => {
+    for (const stroke of selected.length ? selected : vox)
+      stroke.sound[key] = value;
+  });
+  emit("brush");
 }
 // The drawing clipboard holds independent vector copies, not a bitmap. It survives
 // project changes within this tab, and Copy never changes project history.
@@ -410,7 +442,7 @@ export function validateProject(data) {
           pressure: num(q.pressure, 0.65, 0.01, 1),
         };
       }),
-      brush: TOOLS.slice(0, 6).includes(s.brush) ? s.brush : "Ink",
+      brush: Object.hasOwn(TOOL_COLORS, s.brush) ? s.brush : "Ink",
       pitchShift: num(s.pitchShift, 0, -127, 127),
       color: /^#[0-9a-f]{6}$/i.test(s.color) ? s.color : "#4b7ed5",
       size: num(s.size, 9, 1, 80),
@@ -418,6 +450,18 @@ export function validateProject(data) {
       layerId: s.layerId,
       smudged: !!s.smudged,
       sound: {
+        ...(s.brush === "Vox" || s.sound?.vowel !== undefined
+          ? {
+              vowel: ["Ooh", "Oh", "Ah", "Ay", "Ee"].includes(s.sound?.vowel)
+                ? s.sound.vowel
+                : "Ooh",
+              formant: num(s.sound?.formant, 1, 0.5, 2),
+              vocalDepth: num(s.sound?.vocalDepth, 0.7, 0, 1),
+              vibratoAmount: num(s.sound?.vibratoAmount, 0.15, 0, 1),
+              vibratoSpeed: num(s.sound?.vibratoSpeed, 5, 0.1, 12),
+              stereoDelay: num(s.sound?.stereoDelay, 0.15, 0, 1),
+            }
+          : {}),
         volume: num(s.sound?.volume, 0.65, 0, 1),
         attack: num(s.sound?.attack, 0.025, 0.001, 2),
         release: num(s.sound?.release, 0.18, 0.01, 2),

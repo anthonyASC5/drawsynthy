@@ -32,6 +32,7 @@ import {
   timeline,
   createGraph,
   soundNote,
+  curvePitch,
   metronomeNote,
 } from "./audio.js";
 
@@ -1453,6 +1454,20 @@ export function encodeMIDI(p) {
   const notes = timeline(p),
     ppq = 480,
     tracks = [];
+  // Dedicated spare channels preserve independent vocal bends beside layer notes.
+  // If all spare channels are busy, the standard note-change path still exports
+  // that voice. MIDI carries pitch/timing/velocity; vowel synthesis stays in WAV.
+  const vocalChannels = Array.from({ length: 16 }, (_, i) => i)
+    .filter((i) => i !== 9 && i >= p.layers.length)
+    .map((channel) => ({ channel, end: -1 }));
+  const vocalAssignments = new Map();
+  for (const note of notes.filter((n) => n.brush === "Vox")) {
+    const slot = vocalChannels.find((c) => c.end <= note.start);
+    if (slot) {
+      vocalAssignments.set(note, slot.channel);
+      slot.end = note.start + note.duration;
+    }
+  }
   function track(events) {
     events.sort((a, b) => a.tick - b.tick || a.order - b.order);
     let prev = 0,
@@ -1496,6 +1511,51 @@ export function encodeMIDI(p) {
         { tick: 0, order: -1, data: [192 + index, 80] },
       ];
     for (const n of notes.filter((n) => n.layerId === layer.id)) {
+      if (vocalAssignments.has(n)) {
+        const channel = vocalAssignments.get(n);
+        const tick = Math.round(n.start * ppq);
+        // General MIDI voice oohs, and RPN 0 sets a ±64-semitone bend range.
+        for (const data of [
+          [192 + channel, 53],
+          [176 + channel, 101, 0],
+          [176 + channel, 100, 0],
+          [176 + channel, 6, 64],
+          [176 + channel, 38, 0],
+          [176 + channel, 101, 127],
+          [176 + channel, 100, 127],
+        ])
+          events.push({ tick, order: 0.1, data });
+        const bend = (beat) => {
+          const value = Math.round(
+            clamp(8192 + ((curvePitch(n, beat) - 64) / 64) * 8192, 0, 16383),
+          );
+          events.push({
+            tick: Math.round((n.start + beat) * ppq),
+            order: 0.5,
+            data: [224 + channel, value & 127, value >> 7],
+          });
+        };
+        bend(0);
+        for (let beat = 1 / 32; beat < n.duration; beat += 1 / 32) bend(beat);
+        bend(Math.max(0, n.duration - 1 / ppq));
+        events.push(
+          {
+            tick,
+            order: 1,
+            data: [
+              144 + channel,
+              64,
+              Math.max(1, Math.round(n.velocity * 127)),
+            ],
+          },
+          {
+            tick: Math.max(tick + 1, Math.round((n.start + n.duration) * ppq)),
+            order: 0,
+            data: [128 + channel, 64, 0],
+          },
+        );
+        continue;
+      }
       const drum = n.brush === "Drums",
         channel = drum ? 9 : index;
       const parts = drum

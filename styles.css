@@ -2068,3 +2068,31 @@ body {
     gap: 3px 8px;
   }
 }
+
+/* Vox fits the existing inset Properties window. */
+.vox-singer {
+  height: 88px;
+  margin: 6px 0 12px;
+  overflow: hidden;
+  color: #68516b;
+  background: #ede9de;
+  border: 2px inset #e6e4da;
+}
+.vox-singer svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.vox-head {
+  transform-origin: 90px 60px;
+}
+.vox-properties > small {
+  display: block;
+  margin: 8px 0;
+  line-height: 1.4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vox-head {
+    transform: none !important;
+  }
+}

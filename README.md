@@ -16,10 +16,13 @@ Every visit or refresh opens a new blank drawing with default project settings. 
 - **Watercolor:** translucent soft pad. **Marker:** warm triangle sustain.
 - **Bass:** low sawtooth, monophonic across bass marks.
 - **Drums:** kick, snare, closed or open hi-hat. Drag to place a trail.
+- **Vox:** a sustained singing voice made from oscillators, generated breath noise, and vowel formant filters. Curves bend pitch smoothly through the selected scale; thickness controls volume and lower opacity adds breath. Each continuous mark triggers once. Vox stays sustained with Melody enabled.
 - **Eraser:** removes intersecting whole vector strokes on the active layer.
 - **Select:** drag a rectangle (or click a mark); drag selected artwork to move it. Drag the bottom-right handle to resize. Properties includes duplicate, delete, and move to layer.
 - **Line / Shape stamp:** drag from one corner to another to size a shape. Release to place; Select then lets you reposition and resize it. “Place centered” is a keyboard-accessible alternative. Nine shapes include melody and drum patterns.
 - **Hand:** pan after zooming. Ctrl/Command + wheel also zooms. Touch: one finger paints, two fingers pan and zoom. Pen pressure controls width and loudness.
+
+Vox Properties includes Ooh/Oh/Ah/Ay/Ee vowels, formant shift, vocal depth, vibrato amount and speed (Hz), attack and release (seconds), volume, and BPM-synchronized stereo delay. Controls update selected Vox strokes, or all Vox strokes across layers when no Vox marks are selected, as well as new strokes. Changes are audible during playback and support Undo/Redo. Its compact original singer changes mouth shape with the vowel and follows the sounding voice’s pitch and volume; choosing another tool hides it. Vox uses the same Select, Move, Resize, Smudge, Symmetry, Echo Paint, history, layers, saving, and transport paths as other strokes.
 
 Tool properties expose size, opacity, hardness, smoothing, volume, attack, and release where relevant. Expand “Brush & envelope” for advanced settings. Sound properties contain scale, range, effects, and metronome settings. Sliders have adjacent editable number fields. Paper and grid settings never modify notes.
 
@@ -31,7 +34,7 @@ Click **synthjump** beside the paper controls to turn the canvas into a graph-pa
 
 The Synthjump checks are included in `npm run test:browser`.
 
-Brush colors follow their instruments: **Pencil red, Ink purple, Watercolor blue, Marker orange, Bass green, and Drums yellow**. The guide below the canvas shows the mapping. Existing saved marks keep their colors.
+Brush colors follow their instruments: **Pencil red, Ink purple, Watercolor blue, Marker orange, Bass green, Drums yellow, and Vox rose**. The guide below the canvas shows the mapping. Existing saved marks keep their colors.
 
 ## Musical tools
 
@@ -81,18 +84,18 @@ History retains 60 actions. Completed strokes, erase gestures, transforms, stamp
 Projects auto-save in IndexedDB after changes. File → Open lists saved projects and supports deletion. New and Open save the current project before switching when storage is available. File → Duplicate creates an independent project. Import accepts `.dsy` or JSON files with Draw Synth version 1 data and validates bounds and limits. Export a project file for backups: clearing browser data removes local projects.
 
 - **WAV:** one full loop, 44.1 kHz stereo PCM16, rendered with OfflineAudioContext and the same notes, synths, seeded noise, compressor, and effects as live playback. Ping-pong includes the outward and return passes. Metronome is included when enabled. Short edge fades prevent clicks; release and effect tails beyond the exact loop are trimmed.
-- **MIDI:** format 1, 480 ticks per quarter note, tempo and time signature, separate layer tracks, velocity and durations. Drums use channel 10. Pitch glides become successive MIDI notes. MIDI does not contain the exact brush sounds or effects.
+- **MIDI:** format 1, 480 ticks per quarter note, tempo and time signature, separate layer tracks, velocity and durations. Drums use channel 10. Vox glides use sustained notes with pitch bends on spare channels and the General MIDI Voice Oohs program. When all spare channels are occupied, additional voices use successive MIDI notes, as other brushes do. Vowel, breath, vibrato, and delay sounds are retained in WAV; MIDI playback depends on the receiving instrument. MIDI does not contain the exact brush sounds or effects.
 - **PNG:** 1800 × 1000 artwork; options to omit grid and paper texture. Visible layers are exported. Viewport zoom, selection handles, and playhead are omitted.
 - **Project:** lossless editable `.dsy` JSON with strokes, pressure, brushes, layers, paper, sound, and transport settings.
 
 ## Audio timing and limits
 
-A 25 ms scheduler looks 120 ms ahead using the AudioContext clock. The playhead reads that same clock. Each monotonic stroke segment is a continuous voice with frequency automation; overlapping segments form chords. Tempo and composition edits rebase active voices with short fades. On a suspended tab's return the scheduler resumes at the current position and skips missed onsets. Maximum 32 simultaneous instrument voices; older voices yield first. Avoid extremely dense compositions if exact live/offline voice stealing is important.
+A 25 ms scheduler looks 120 ms ahead using the AudioContext clock. The playhead reads that same clock. Each Vox stroke is one continuous voice; other brushes use each monotonic stroke segment as a continuous voice with frequency automation; overlapping segments form chords. Tempo and composition edits rebase active voices with short fades. On a suspended tab's return the scheduler resumes at the current position and skips missed onsets. Maximum 32 simultaneous instrument voices; older voices yield first. Avoid extremely dense compositions if exact live/offline voice stealing is important.
 
 Modern Chrome, Edge, Firefox, and Safari are recommended. Browser audio starts only after Play or Preview is activated. Device sleep, background audio restrictions, silent mode, and audio-device changes can interrupt playback. WAV export may use substantial memory for slow eight-bar ping-pong loops. IndexedDB may be blocked or temporary in private browsing; use project-file export. Fullscreen and pressure support vary by browser. Mobile settings expose master volume hidden from the compact transport. High-contrast mode is in View. Reduced-motion preferences are respected.
 
 ## Verification
 
-`npm test` runs all 46 unit tests from `tests/core.test.js`, covering composition, MIDI/WAV encoding, validation, geometry, image tracing, musical tools, and optional melody arrangement. `npm ci` installs the locked development-only tools. With the local server running, `npm run test:browser` runs `tests/browser.mjs`, which groups the existing drawing/export, image/pitch, musical-tool, and Synthjump browser checks (run `npx playwright install chromium` once if needed). The app itself has no package dependencies.
+`npm test` runs all 52 unit tests from `tests/core.test.js` and `tests/vox.test.js`, covering composition, MIDI/WAV encoding, validation, geometry, image tracing, musical tools, and optional melody arrangement. `npm ci` installs the locked development-only tools. With the local server running, `npm run test:browser` runs `tests/browser.mjs`, which groups the existing drawing/export, image/pitch, musical-tool, and Synthjump browser checks (run `npx playwright install chromium` once if needed). Run `node tests/vox-browser.mjs` with the same server for Vox controls, drawing, singer state, transport/seek, and actual offline vowel, breath, release, and stereo rendering checks. The app itself has no package dependencies.
 
 Installed dependencies (`node_modules/`), generated browser artifacts (`tests/artifacts/`), and macOS metadata are ignored by Git. Dependencies stay available locally for development; regenerate them with `npm ci` after a fresh checkout. Browser artifacts are disposable and recreated by the browser suite.

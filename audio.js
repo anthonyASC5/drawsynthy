@@ -51,6 +51,8 @@ export function compileNotes(project, includeRain = true) {
       if (d) direction = d;
     }
     segments.push(current);
+    // A Vox mark is one sustained gesture, including folds and vertical marks.
+    if (stroke.brush === "Vox") segments = [stroke.points];
     // Vertical marks intersect several pitches at once: turn those into a chord.
     segments = segments.flatMap((segment) => {
       const xs = segment.map((p) => p.x),
@@ -58,7 +60,7 @@ export function compileNotes(project, includeRain = true) {
       if (
         !vertical ||
         Math.max(...ys) - Math.min(...ys) < 0.015 ||
-        stroke.brush === "Bass"
+        ["Bass", "Vox"].includes(stroke.brush)
       )
         return [segment];
       const top = Math.min(...ys),
@@ -87,12 +89,15 @@ export function compileNotes(project, includeRain = true) {
             : stroke.brush === "Pencil"
               ? 0.12
               : 0.2;
-      const duration = Math.max(minDuration, end - start);
+      const duration = Math.max(
+        stroke.brush === "Vox" ? 0.03 : minDuration,
+        end - start,
+      );
       // Each note combines canvas pitch, brush range, and transposition, then clamps to
       // MIDI limits. Pressure, thickness, layer gain, and opacity shape its sound.
       const pitch = (p) =>
         clamp(
-          pitchAt(p.y, project, !!stroke.smudged) +
+          pitchAt(p.y, project, !!stroke.smudged || stroke.brush === "Vox") +
             (stroke.brush === "Bass" ? -24 : 0) +
             (stroke.pitchShift || 0) +
             (project.pitchShift || 0),
@@ -126,6 +131,7 @@ export function compileNotes(project, includeRain = true) {
           0.008,
           0.85,
         ),
+        breathiness: 1 - clamp(stroke.opacity),
         brightness: clamp(stroke.opacity * (stroke.sound.hardness ?? 0.75)),
         sound: stroke.sound,
         seed: hash(stroke.id),
@@ -216,6 +222,7 @@ export function compileRainNotes(project) {
         0.008,
         0.85,
       ),
+      breathiness: 1 - clamp(stroke.opacity),
       brightness: clamp(stroke.opacity * (stroke.sound.hardness ?? 0.75)),
       seed: hash(drop.id),
       rain: { cloudId: drop.cloudId, x: drop.x, y: drop.y },
@@ -276,7 +283,7 @@ export function timeline(project) {
 function arrangeMelody(notes, project) {
   if (project.melody !== true) return notes;
   const length = project.bars * 4 * (project.pingpong ? 2 : 1);
-  const result = [];
+  const result = notes.filter((n) => n.brush === "Vox");
   const scale = pitches(project);
   const scaleClasses = new Set(scale.map((pitch) => pitch % 12));
   const release = Math.min(0.04, (60 / project.bpm) * 0.08);
@@ -299,7 +306,8 @@ function arrangeMelody(notes, project) {
   }
   for (const bass of [false, true]) {
     const pool = notes.filter(
-      (n) => n.brush !== "Drums" && (n.brush === "Bass") === bass,
+      (n) =>
+        !["Drums", "Vox"].includes(n.brush) && (n.brush === "Bass") === bass,
     );
     let previous = null,
       previousId = null;
@@ -489,7 +497,188 @@ export function createGraph(context, p) {
     },
   };
 }
+// Parallel resonances approximate a singing vocal tract. All excitation is generated
+// here: a harmonic glottal source, a low fundamental, and seeded breath noise.
+export const VOWEL_FORMANTS = Object.freeze({
+  Ooh: [325, 700, 2530],
+  Oh: [450, 800, 2830],
+  Ah: [800, 1150, 2900],
+  Ay: [500, 1750, 2450],
+  Ee: [270, 2290, 3010],
+});
+export function curvePitch(note, beat) {
+  const curve = note.curve || [{ beat: 0, pitch: note.pitch }];
+  let low = 0,
+    high = curve.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (curve[mid].beat <= beat) low = mid;
+    else high = mid - 1;
+  }
+  const a = curve[low],
+    b = curve[Math.min(low + 1, curve.length - 1)];
+  return (
+    a.pitch +
+    (b.pitch - a.pitch) * clamp((beat - a.beat) / (b.beat - a.beat || 1))
+  );
+}
+function soundVox(context, graph, n, time, secondsPerBeat, offset) {
+  const start = Math.max(time, context.currentTime);
+  const duration = Math.max(0.008, (n.duration - offset) * secondsPerBeat);
+  const sound = n.sound || {};
+  const release = clamp(sound.release ?? 0.18, 0.01, 2);
+  const attack = Math.min(
+    clamp(sound.attack ?? 0.04, 0.001, 2),
+    duration * 0.45,
+  );
+  const depth = clamp(sound.vocalDepth ?? 0.7);
+  const breath = clamp(n.breathiness ?? 0.1);
+  const nodes = [],
+    sources = [];
+  const make = (node) => {
+    nodes.push(node);
+    return node;
+  };
+  const output = make(context.createGain());
+  const level = n.velocity * 0.6;
+  output.gain.setValueAtTime(0, start);
+  output.gain.linearRampToValueAtTime(level, start + attack);
+  output.gain.setValueAtTime(level, start + duration);
+  output.gain.linearRampToValueAtTime(0, start + duration + release);
+  output.connect(graph.input);
+
+  const tract = make(context.createGain());
+  const glottis = make(context.createOscillator());
+  glottis.type = "sawtooth";
+  const voiced = make(context.createGain());
+  voiced.gain.value = 0.65 * (1 - breath * 0.65);
+  glottis.connect(voiced);
+  voiced.connect(tract);
+  const fundamental = make(context.createOscillator());
+  fundamental.type = "sine";
+  const body = make(context.createGain());
+  body.gain.value = 0.08 + depth * 0.12;
+  fundamental.connect(body);
+  body.connect(output);
+
+  const noise = make(context.createBufferSource());
+  const buffer = context.createBuffer(
+    1,
+    context.sampleRate,
+    context.sampleRate,
+  );
+  const data = buffer.getChannelData(0),
+    random = rng(n.seed || 42);
+  for (let i = 0; i < data.length; i++) data[i] = random() * 2 - 1;
+  noise.buffer = buffer;
+  noise.loop = true;
+  const air = make(context.createGain());
+  air.gain.value = breath * 0.48;
+  noise.connect(air);
+  air.connect(tract);
+
+  const vowel = VOWEL_FORMANTS[sound.vowel] || VOWEL_FORMANTS.Ooh;
+  vowel.forEach((hz, i) => {
+    const filter = make(context.createBiquadFilter());
+    filter.type = "bandpass";
+    filter.frequency.value = Math.min(
+      context.sampleRate * 0.45,
+      hz * clamp(sound.formant ?? 1, 0.5, 2),
+    );
+    filter.Q.value = [5, 8, 10][i] * (0.65 + depth * 0.7);
+    const mix = make(context.createGain());
+    mix.gain.value = [1.5, 0.8, 0.4][i] * (0.6 + depth * 0.6);
+    tract.connect(filter);
+    filter.connect(mix);
+    mix.connect(output);
+  });
+  const vibrato = make(context.createOscillator());
+  vibrato.frequency.value = clamp(sound.vibratoSpeed ?? 5, 0.1, 12);
+  const vibratoGain = make(context.createGain());
+  vibratoGain.gain.value = clamp(sound.vibratoAmount ?? 0.15) * 100;
+  vibrato.connect(vibratoGain);
+  for (const oscillator of [glottis, fundamental]) {
+    vibratoGain.connect(oscillator.detune);
+    oscillator.frequency.setValueAtTime(
+      frequency(curvePitch(n, offset)),
+      start,
+    );
+    for (const p of n.curve || [])
+      if (p.beat > offset && p.beat <= n.duration)
+        oscillator.frequency.exponentialRampToValueAtTime(
+          frequency(p.pitch),
+          start + (p.beat - offset) * secondsPerBeat,
+        );
+  }
+  // Independent left/right taps use the same BPM as the transport, with no feedback.
+  const delayAmount = clamp(sound.stereoDelay ?? 0.15);
+  for (const [pan, beats] of [
+    [-0.8, 0.5],
+    [0.8, 0.75],
+  ]) {
+    const delay = make(context.createDelay(2));
+    delay.delayTime.value = secondsPerBeat * beats;
+    const wet = make(context.createGain());
+    wet.gain.value = delayAmount * 0.4;
+    const panner = make(context.createStereoPanner());
+    panner.pan.value = pan;
+    output.connect(delay);
+    delay.connect(wet);
+    wet.connect(panner);
+    panner.connect(graph.input);
+  }
+  sources.push(glottis, fundamental, noise, vibrato);
+  let activeUntil = start + duration;
+  const end = start + duration + release;
+  sources.forEach((source) => {
+    source.start(start);
+    source.stop(end + 0.025);
+  });
+  // A silent clock source retains the delay taps until their tails have drained.
+  const cleanup = context.createOscillator();
+  cleanup.start(start);
+  cleanup.stop(end + secondsPerBeat * 0.75 + 0.05);
+  cleanup.onended = () => {
+    nodes.forEach((node) => node.disconnect());
+    cleanup.disconnect();
+  };
+  return {
+    end,
+    vox: true,
+    activity(now) {
+      if (now < start || now >= activeUntil) return null;
+      return {
+        vowel: sound.vowel || "Ooh",
+        pitch: curvePitch(n, offset + (now - start) / secondsPerBeat),
+        volume: n.velocity,
+      };
+    },
+    stop(t = context.currentTime) {
+      activeUntil = t;
+      output.gain.cancelScheduledValues(t);
+      output.gain.setTargetAtTime(0, t, 0.009);
+      sources.forEach((source) => {
+        try {
+          source.stop(t + 0.05);
+        } catch {}
+      });
+      cleanup.stop(t + secondsPerBeat * 0.75 + 0.1);
+    },
+  };
+}
+export function voxActivity() {
+  if (!context) return null;
+  return (
+    voices
+      .filter((v) => v.vox)
+      .map((v) => v.activity(context.currentTime))
+      .filter(Boolean)
+      .sort((a, b) => b.volume - a.volume)[0] || null
+  );
+}
 export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
+  if (n.brush === "Vox")
+    return soundVox(context, graph, n, time, secondsPerBeat, offset);
   const start = Math.max(time, context.currentTime),
     remaining = Math.max(0.008, (n.duration - offset) * secondsPerBeat),
     sound = n.sound || {},
@@ -906,6 +1095,7 @@ export async function previewSound() {
     "Marker",
     "Bass",
     "Drums",
+    "Vox",
   ].includes(state.tool)
     ? state.tool
     : "Ink";
@@ -922,6 +1112,7 @@ export async function previewSound() {
         brush,
         velocity: state.brush.volume,
         brightness: state.brush.opacity,
+        breathiness: 1 - state.brush.opacity,
         sound: state.brush,
         seed: 42,
       },

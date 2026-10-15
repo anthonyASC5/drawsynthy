@@ -16,6 +16,7 @@ import {
   loadProject,
   clamp,
   newStroke,
+  setVoxSound,
   snapshot,
   commit,
   saveProject,
@@ -65,6 +66,7 @@ import {
   stop,
   seekStart,
   previewSound,
+  voxActivity,
 } from "./audio.js";
 
 const $ = (s) => document.querySelector(s),
@@ -111,6 +113,7 @@ const hints = {
   Marker: "Broad strokes make warm, sustained tones.",
   Bass: "Low-end color. The next bass mark takes over the note.",
   Drums: "Tap for a beat, or drag a trail of drum dots.",
+  Vox: "Draw a singing voice. Height bends pitch; thickness sets volume; lower opacity adds breath.",
   Eraser: "Erase whole marks on the active layer. Undo brings them back.",
   Smudge: "Push the paint around. The music follows.",
   Select:
@@ -234,6 +237,7 @@ function selectTool(tool) {
     Marker: [20, 0.05, 0.25],
     Bass: [14, 0.02, 0.16],
     Drums: [12, 0.003, 0.08],
+    Vox: [12, 0.04, 0.25],
   };
   if (preset[tool]) {
     [state.brush.size, state.brush.attack, state.brush.release] = preset[tool];
@@ -260,7 +264,7 @@ function toolLabel(name) {
 }
 function renderTools() {
   const container = $("#tools");
-  TOOLS.forEach((name, i) => {
+  TOOLS.forEach((name) => {
     if (name === "Smudge") return;
     const label = toolLabel(name);
     const b = button(container, "", () => selectTool(name), {
@@ -271,6 +275,7 @@ function renderTools() {
       "aria-pressed": name === state.tool,
     });
     const icons = {
+      Vox: '<path d="M9 5a4 4 0 0 1 8 0v7a4 4 0 0 1-8 0ZM5 10v2a8 8 0 0 0 16 0v-2M13 20v4M9 24h8"/>',
       "Musical Symmetry":
         '<path d="M12 2v21M3 5h5v15H3l4-7ZM21 5h-5v15h5l-4-7Z"/>',
       "Echo Paint":
@@ -280,7 +285,7 @@ function renderTools() {
     };
     if (TOOL_COLORS[name])
       b.style.setProperty("--tool-color", TOOL_COLORS[name]);
-    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[i]}"/>`}</svg><span>${label}</span>`;
+    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[TOOLS.filter((t) => t !== "Vox").indexOf(name)]}"/>`}</svg><span>${label}</span>`;
   });
 }
 function musicalSettings(p) {
@@ -490,7 +495,95 @@ function musicalSettings(p) {
   );
   apply.disabled = !count;
 }
+let singerFrame;
+function voxSettings(parent) {
+  const section = el("section", {
+    class: "vox-properties",
+    "aria-label": "Vox Properties",
+  });
+  parent.append(section);
+  const singer = el("div", {
+    class: "vox-singer",
+    role: "img",
+    "aria-label": "Animated Vox singer",
+  });
+  // An original little headphone-wearing singer, drawn as native vector artwork.
+  singer.innerHTML = `<svg viewBox="0 0 180 88" aria-hidden="true">
+    <path d="M0 76h180M12 70v-6m8 6V55m8 15v-9m124 9v-6m8 6V55m8 15v-9" stroke="currentColor" fill="none" opacity=".35"/>
+    <path d="M55 86q4-28 35-28t35 28" fill="#8581cb" stroke="#343346" stroke-width="2"/>
+    <path d="m81 69 9 5 9-5v12l-9-5-9 5Z" fill="#efd462" stroke="#343346"/>
+    <g class="vox-head">
+      <path d="M61 32q0-26 29-26t29 26" fill="none" stroke="#343346" stroke-width="6"/>
+      <rect x="65" y="13" width="50" height="49" rx="20" fill="#e8b791" stroke="#343346" stroke-width="2"/>
+      <path d="M68 27q7-26 37-9l8 9q-22-2-29-9-5 9-16 9Z" fill="#685149"/>
+      <rect x="59" y="29" width="9" height="20" rx="4" fill="#c47caa" stroke="#343346" stroke-width="2"/>
+      <rect x="112" y="29" width="9" height="20" rx="4" fill="#c47caa" stroke="#343346" stroke-width="2"/>
+      <path d="M75 36q4-5 8 0m14 0q4-5 8 0" fill="none" stroke="#343346" stroke-width="2" stroke-linecap="round"/>
+      <ellipse class="vox-mouth" cx="90" cy="49" rx="5" ry="6" fill="#613949" stroke="#343346" stroke-width="1.5"/>
+    </g>
+    <path d="M133 86V60m-5 26h10" stroke="#343346" stroke-width="2"/>
+    <rect x="127" y="44" width="12" height="19" rx="6" fill="#a8b1b7" stroke="#343346" stroke-width="2"/>
+    <path d="M130 48h6m-6 4h6m-6 4h6" stroke="#343346"/>
+  </svg>`;
+  section.append(singer);
+  select(
+    section,
+    "Vowel",
+    ["Ooh", "Oh", "Ah", "Ay", "Ee"],
+    state.brush.vowel,
+    (value) => {
+      setVoxSound("vowel", value);
+    },
+  );
+  for (const [key, label, min, max, step, scale] of [
+    ["formant", "Formant", 0.5, 2, 0.01, 1],
+    ["vocalDepth", "Vocal Depth", 0, 100, 1, 100],
+    ["vibratoAmount", "Vibrato Amount", 0, 100, 1, 100],
+    ["vibratoSpeed", "Vibrato Speed", 0.1, 12, 0.1, 1],
+    ["attack", "Attack", 0.001, 2, 0.001, 1],
+    ["release", "Release", 0.01, 2, 0.01, 1],
+    ["volume", "Volume", 0, 100, 1, 100],
+    ["stereoDelay", "Stereo Delay", 0, 100, 1, 100],
+  ])
+    range(section, label, state.brush[key] * scale, min, max, step, (value) => {
+      setVoxSound(key, value / scale);
+    });
+  section.append(
+    el(
+      "small",
+      {},
+      "Controls update selected Vox strokes, or all Vox strokes when none are selected, plus new strokes. Low opacity adds breath. Vibrato speed is in Hz; attack and release are in seconds.",
+    ),
+  );
+  button(section, "♫ Preview voice", previewSound);
+  const head = singer.querySelector(".vox-head"),
+    mouth = singer.querySelector(".vox-mouth");
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const animate = (time) => {
+    if (!singer.isConnected) return;
+    const voice = voxActivity();
+    const vowel = voice?.vowel || state.brush.vowel;
+    const [width, height] = {
+      Ooh: [4, 6],
+      Oh: [6, 7],
+      Ah: [9, 8],
+      Ay: [10, 5],
+      Ee: [11, 3],
+    }[vowel];
+    const pulse =
+      voice && !reducedMotion.matches ? 1 + Math.sin(time / 85) * 0.08 : 0.8;
+    mouth.setAttribute("rx", width * pulse);
+    mouth.setAttribute("ry", height * pulse);
+    const pitch = voice ? clamp((voice.pitch - 60) / 24, -1, 1) : 0;
+    const volume = voice?.volume || 0;
+    head.style.transform = `translateY(${-pitch * 3 - volume * 2}px) rotate(${voice ? Math.sin(time / 350) * volume * 4 : 0}deg)`;
+    singer.dataset.singing = String(!!voice);
+    singerFrame = requestAnimationFrame(animate);
+  };
+  singerFrame = requestAnimationFrame(animate);
+}
 function toolSettings() {
+  cancelAnimationFrame(singerFrame);
   const p = $("#tool-settings");
   p.replaceChildren();
   $("#tool-name").textContent = toolLabel(state.tool);
@@ -556,6 +649,10 @@ function toolSettings() {
     return;
   }
   brush("opacity", "Opacity", 5, 100, 1, 100);
+  if (state.tool === "Vox") {
+    voxSettings(p);
+    return;
+  }
   if (state.tool === "Drums")
     // Drum sounds and shape presets use the same stroke data as freehand drawing.
     // Additional envelope controls configure the instrument carried by new marks.

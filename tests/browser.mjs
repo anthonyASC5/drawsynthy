@@ -1102,7 +1102,7 @@ import { mkdir, readFile } from "node:fs/promises";
     await page.goto("http://127.0.0.1:8080");
     await page.waitForFunction(() => window.drawSynth);
     assert.equal(await page.locator("#custom-color, .swatch").count(), 0);
-    assert.equal(await page.locator(".tool-color-key").count(), 6);
+    assert.equal(await page.locator(".tool-color-key").count(), 7);
     await page.locator("#synthjump").click();
     assert.equal(
       await page.locator("#synthjump").getAttribute("aria-pressed"),
