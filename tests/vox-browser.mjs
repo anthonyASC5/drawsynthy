@@ -25,6 +25,8 @@ try {
       await page.getByRole("slider", { name, exact: true }).count(),
       1,
     );
+  // Finish the automatic brush preview before checking the idle vowel shape.
+  await page.evaluate(async () => (await import("/audio.js")).stop());
   const mouth = page.locator(".vox-mouth");
   await page.getByLabel("Vowel", { exact: true }).selectOption("Ee");
   await page.waitForTimeout(50);

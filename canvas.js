@@ -18,6 +18,8 @@ import {
   symmetry,
   updateSymmetry,
   generatedMarks,
+  grossEditor,
+  grossPreview,
   rainPattern,
   wrap,
   addRain,
@@ -34,6 +36,8 @@ import {
   soundNote,
   curvePitch,
   metronomeNote,
+  previewDrawingSound,
+  stopDrawingSound,
 } from "./audio.js";
 
 // Canvas rendering
@@ -268,14 +272,21 @@ function render() {
   ctx.rect(view.left, view.top, view.width, view.height);
   ctx.clip();
   ctx.translate(view.left, view.top);
+  const gross =
+    state.tool === "Gross Beat" && grossEditor.preview ? grossPreview() : null;
   for (const layer of [...state.project.layers].reverse())
     if (layer.visible)
       for (const s of state.project.strokes)
-        if (s.layerId === layer.id) drawStroke(ctx, s, view.width, view.height);
-  for (const s of musicalPreview)
+        if (s.layerId === layer.id && !gross?.sourceIds.has(s.id))
+          drawStroke(ctx, s, view.width, view.height);
+  for (const s of musicalPreview.filter(
+    (s) => state.project.layers.find((l) => l.id === s.layerId)?.visible,
+  ))
     drawStroke(
       ctx,
-      { ...s, opacity: Math.min(0.35, s.opacity * 0.4) },
+      state.tool === "Gross Beat"
+        ? s
+        : { ...s, opacity: Math.min(0.35, s.opacity * 0.4) },
       view.width,
       view.height,
     );
@@ -433,7 +444,16 @@ export function initCanvas() {
     if (["edit", "load", "view", "change"].includes(t)) paperCache = null;
     // State events refresh only the relevant cached previews and rain pattern. Animation
     // continues during playback so falling droplets follow audio-clock time.
-    if (["edit", "load", "tool", "selection", "musical-preview"].includes(t))
+    if (
+      [
+        "edit",
+        "load",
+        "tool",
+        "selection",
+        "layer",
+        "musical-preview",
+      ].includes(t)
+    )
       musicalPreview = generatedMarks();
     if (["edit", "load", "music"].includes(t))
       droplets = rainPattern(state.project);
@@ -803,6 +823,7 @@ export function duplicateSelection() {
   });
 }
 export function cancelAction() {
+  stopDrawingSound();
   if (action) {
     state.project = JSON.parse(action.before);
     action = null;
@@ -825,7 +846,13 @@ export function placeCentered() {
   state.tool = "Select";
   emit("tool");
 }
+function auditionStroke(stroke, point) {
+  previewDrawingSound(stroke, point).catch((error) => {
+    document.querySelector("#status-message").textContent = error.message;
+  });
+}
 export function initTools() {
+  window.addEventListener("blur", stopDrawingSound);
   const canvas = canvasElement();
   canvas.addEventListener("pointerdown", (e) => {
     if (jumper.active) {
@@ -836,6 +863,7 @@ export function initTools() {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
+      stopDrawingSound();
       if (action) {
         state.project = JSON.parse(action.before);
         action = null;
@@ -912,6 +940,7 @@ export function initTools() {
     }
     const stroke = newStroke([p]);
     action.stroke = stroke;
+    auditionStroke(stroke, p);
     state.project.strokes.push(stroke);
     invalidate();
   });
@@ -1017,7 +1046,9 @@ export function initTools() {
     } else if (action.stroke) {
       if (tool === "Drums") {
         if (Math.hypot(p.x - action.last.x, p.y - action.last.y) > 0.018) {
-          state.project.strokes.push(newStroke([p], "Drums"));
+          const hit = newStroke([p], "Drums");
+          state.project.strokes.push(hit);
+          auditionStroke(hit, p);
           action.last = p;
         }
         return;
@@ -1035,11 +1066,13 @@ export function initTools() {
             y: prev.y + (p.y - prev.y) * f,
           });
       }
+      auditionStroke(action.stroke, action.stroke.points.at(-1));
       invalidate();
     }
     action.last = p;
   });
   const finish = (e) => {
+    stopDrawingSound();
     pointers.delete(e.pointerId);
     if (gesture) {
       if (!pointers.size) gesture = null;
@@ -1097,6 +1130,7 @@ export function initTools() {
   };
   canvas.addEventListener("pointerup", finish);
   canvas.addEventListener("pointercancel", () => cancelAction());
+  canvas.addEventListener("lostpointercapture", stopDrawingSound);
   canvas.addEventListener(
     "wheel",
     (e) => {

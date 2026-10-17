@@ -90,7 +90,13 @@ export function compileNotes(project, includeRain = true) {
               ? 0.12
               : 0.2;
       const duration = Math.max(
-        stroke.brush === "Vox" ? 0.03 : minDuration,
+        stroke.chop
+          ? end - start > 0.000001
+            ? 0
+            : stroke.chop.pointDuration
+          : stroke.brush === "Vox"
+            ? 0.03
+            : minDuration,
         end - start,
       );
       // Each note combines canvas pitch, brush range, and transposition, then clamps to
@@ -122,6 +128,7 @@ export function compileNotes(project, includeRain = true) {
         })),
         pitchShift: (project.pitchShift || 0) + (stroke.pitchShift || 0),
         brush: stroke.brush,
+        ...(stroke.chop ? { chopped: true } : {}),
         color: stroke.color,
         velocity: clamp(
           (stroke.sound.volume ?? 0.65) *
@@ -283,7 +290,7 @@ export function timeline(project) {
 function arrangeMelody(notes, project) {
   if (project.melody !== true) return notes;
   const length = project.bars * 4 * (project.pingpong ? 2 : 1);
-  const result = notes.filter((n) => n.brush === "Vox");
+  const result = notes.filter((n) => n.brush === "Vox" || n.chopped);
   const scale = pitches(project);
   const scaleClasses = new Set(scale.map((pitch) => pitch % 12));
   const release = Math.min(0.04, (60 / project.bpm) * 0.08);
@@ -307,7 +314,9 @@ function arrangeMelody(notes, project) {
   for (const bass of [false, true]) {
     const pool = notes.filter(
       (n) =>
-        !["Drums", "Vox"].includes(n.brush) && (n.brush === "Bass") === bass,
+        !n.chopped &&
+        !["Drums", "Vox"].includes(n.brush) &&
+        (n.brush === "Bass") === bass,
     );
     let previous = null,
       previousId = null;
@@ -379,7 +388,7 @@ function arrangeMelody(notes, project) {
   }
   // Keep percussion, but merge repeated hits of the same kit piece on a sixteenth.
   const drums = new Map();
-  for (const note of notes.filter((n) => n.brush === "Drums")) {
+  for (const note of notes.filter((n) => n.brush === "Drums" && !n.chopped)) {
     const start = Math.min(length - 0.25, Math.round(note.start * 4) / 4);
     const key = `${start}:${note.sound.drum}`;
     if ((drums.get(key)?.velocity ?? -1) < note.velocity)
@@ -524,9 +533,12 @@ export function curvePitch(note, beat) {
 }
 function soundVox(context, graph, n, time, secondsPerBeat, offset) {
   const start = Math.max(time, context.currentTime);
-  const duration = Math.max(0.008, (n.duration - offset) * secondsPerBeat);
+  const remaining = Math.max(0.001, (n.duration - offset) * secondsPerBeat);
   const sound = n.sound || {};
-  const release = clamp(sound.release ?? 0.18, 0.01, 2);
+  const release = n.chopped
+    ? Math.min(0.008, remaining * 0.25)
+    : clamp(sound.release ?? 0.18, 0.01, 2);
+  const duration = n.chopped ? remaining - release : remaining;
   const attack = Math.min(
     clamp(sound.attack ?? 0.04, 0.001, 2),
     duration * 0.45,
@@ -645,6 +657,14 @@ function soundVox(context, graph, n, time, secondsPerBeat, offset) {
   return {
     end,
     vox: true,
+    setPitch(pitch, t = context.currentTime) {
+      n.pitch = pitch;
+      n.curve = [{ beat: 0, pitch }];
+      for (const oscillator of [glottis, fundamental]) {
+        oscillator.frequency.cancelScheduledValues(t);
+        oscillator.frequency.setTargetAtTime(frequency(pitch), t, 0.012);
+      }
+    },
     activity(now) {
       if (now < start || now >= activeUntil) return null;
       return {
@@ -669,7 +689,7 @@ function soundVox(context, graph, n, time, secondsPerBeat, offset) {
 export function voxActivity() {
   if (!context) return null;
   return (
-    voices
+    [...voices, ...(drawingVoice ? [drawingVoice] : [])]
       .filter((v) => v.vox)
       .map((v) => v.activity(context.currentTime))
       .filter(Boolean)
@@ -693,7 +713,13 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
       sound.drum === "open hi-hat" ? 0.42 : sound.drum === "kick" ? 0.24 : 0.15;
   // Per-note gain envelopes apply attack, sustain or pluck decay, and release. The brush
   // and drum type choose the oscillator or seeded-noise source.
-  const release = drum ? 0.045 : clamp(sound.release ?? 0.18, 0.015, 2);
+  const release = n.chopped
+    ? Math.min(0.008, remaining * 0.25)
+    : drum
+      ? 0.045
+      : clamp(sound.release ?? 0.18, 0.015, 2);
+  if (n.chopped)
+    duration = Math.max(0.001, Math.min(duration, remaining - release));
   const gain = context.createGain(),
     filter = context.createBiquadFilter();
   filter.type = "lowpass";
@@ -853,6 +879,13 @@ export function soundNote(context, graph, n, time, secondsPerBeat, offset = 0) {
   };
   return {
     end: start + duration + release,
+    setPitch(pitch, t = context.currentTime) {
+      if (drum) return;
+      for (const node of nodes) {
+        node.frequency.cancelScheduledValues(t);
+        node.frequency.setTargetAtTime(frequency(pitch), t, 0.012);
+      }
+    },
     stop(t = context.currentTime) {
       try {
         gain.gain.cancelScheduledValues(t);
@@ -890,6 +923,7 @@ let context,
   originTime = 0,
   originBeat = 0,
   pausedBeat = 0,
+  restartOnPlay = false,
   tempo = 110,
   scheduled = new Set(),
   voices = [],
@@ -929,6 +963,7 @@ function length() {
   return state.project.bars * 4 * (state.project.pingpong ? 2 : 1);
 }
 function silence() {
+  stopDrawingSound();
   for (const v of voices) v.stop();
   voices = [];
   scheduled.clear();
@@ -950,21 +985,15 @@ export async function play() {
     pause();
     return;
   }
-  if (!context) {
-    const Audio = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!Audio)
-      throw Error(
-        "This browser does not support Web Audio. Try a current Safari, Firefox, or Chromium browser.",
-      );
-    context = new Audio();
-    graph = createGraph(context, state.project);
+  await readyAudio();
+  if (restartOnPlay || (pausedBeat >= length() && !state.project.loop)) {
+    pausedBeat = 0;
+    state.position = 0;
   }
-  await context.resume();
-  if (pausedBeat >= length() && !state.project.loop) pausedBeat = 0;
+  restartOnPlay = false;
   tempo = state.project.bpm;
   originBeat = pausedBeat;
-  // Play starts the scheduler from the paused beat; Pause preserves that beat and
-  // silences voices. Stop also resets the playhead to the beginning.
+  // Pause keeps its visual position; the next Play restarts unless explicitly sought.
   originTime = context.currentTime + 0.035;
   notes = timeline(playbackProject());
   lastComposition = compositionKey();
@@ -979,6 +1008,7 @@ export async function play() {
 export function pause() {
   if (!state.playing) return;
   pausedBeat = Math.max(0, transportBeat());
+  restartOnPlay = true;
   state.playing = false;
   clearInterval(timer);
   silence();
@@ -995,6 +1025,7 @@ export function stop() {
 // Seek in canvas coordinates; a ping-pong seek starts on the forward pass.
 export function seek(position) {
   if (!Number.isFinite(position)) return;
+  restartOnPlay = false;
   state.position = clamp(position);
   pausedBeat = state.position * state.project.bars * 4;
   originBeat = pausedBeat;
@@ -1079,13 +1110,72 @@ function tick(resume = false) {
     scheduled = new Set([...scheduled].slice(-2000));
   }
 }
-export async function previewSound() {
+async function readyAudio() {
   if (!context) {
     const Audio = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!Audio) throw Error("This browser does not support Web Audio.");
     context = new Audio();
     graph = createGraph(context, state.project);
   }
   await context.resume();
+}
+
+let drawingVoice = null,
+  drawingStroke = null,
+  drawingRequest = 0,
+  latestDrawingNote = null,
+  previewVoice = null,
+  previewRequest = 0;
+
+export function stopDrawingSound() {
+  drawingRequest++;
+  drawingVoice?.stop();
+  drawingVoice = null;
+  drawingStroke = null;
+}
+
+export async function previewDrawingSound(stroke, point) {
+  // Compile one contact point so live drawing matches pitch, pressure, layer gain,
+  // transposition, and mute/solo rules used by the saved stroke.
+  const [note] = compileNotes(
+    {
+      ...state.project,
+      strokes: [{ ...stroke, points: [point] }],
+    },
+    false,
+  );
+  if (!note) {
+    stopDrawingSound();
+    return;
+  }
+  latestDrawingNote = note;
+  if (drawingStroke === stroke.id && stroke.brush !== "Drums") {
+    drawingVoice?.setPitch(note.pitch);
+    return;
+  }
+  stopDrawingSound();
+  drawingStroke = stroke.id;
+  const request = drawingRequest;
+  await readyAudio();
+  if (request !== drawingRequest) return;
+  const liveNote = latestDrawingNote;
+  drawingVoice = soundNote(
+    context,
+    graph,
+    {
+      ...liveNote,
+      duration: stroke.brush === "Drums" ? liveNote.duration : 3600,
+    },
+    context.currentTime + 0.006,
+    60 / state.project.bpm,
+  );
+}
+
+export async function previewSound() {
+  const request = ++previewRequest;
+  await readyAudio();
+  if (request !== previewRequest) return;
+  previewVoice?.stop();
   voices = voices.filter((v) => v.end > context.currentTime);
   if (voices.length >= 32) voices.shift().stop();
   const brush = [
@@ -1100,7 +1190,7 @@ export async function previewSound() {
     ? state.tool
     : "Ink";
   voices.push(
-    soundNote(
+    (previewVoice = soundNote(
       context,
       graph,
       {
@@ -1118,7 +1208,7 @@ export async function previewSound() {
       },
       context.currentTime + 0.01,
       60 / state.project.bpm,
-    ),
+    )),
   );
 }
 export function initTransport() {
@@ -1134,6 +1224,7 @@ export function initTransport() {
         "music",
         "change",
         "musical-preview",
+        "layer",
         "tool",
         "selection",
       ].includes(type)
@@ -1143,6 +1234,7 @@ export function initTransport() {
     }
   });
   document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopDrawingSound();
     if (!document.hidden && state.playing) {
       silence();
       generation++;

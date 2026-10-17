@@ -1,3 +1,11 @@
+import { grossDefaults, normalizeGross, grossBeatMarks } from "./grossbeat.js";
+export {
+  GROSS_PRESETS,
+  GROSS_RATES,
+  GROSS_ACTIONS,
+  grossPreset,
+  randomGrossSteps,
+} from "./grossbeat.js";
 // This module owns project defaults, shared editor state, undo history, persistence, and
 // musical transformations. Geometry and timing helpers stay independent of the DOM.
 // Project state and history
@@ -12,6 +20,7 @@ export const TOOLS = [
   "Bass",
   "Drums",
   "Vox",
+  "Gross Beat",
   "Eraser",
   "Smudge",
   "Select",
@@ -48,6 +57,8 @@ export const defaults = () => ({
   name: "Untitled jam",
   strokes: [],
   rainClouds: [],
+  grossBeat: grossDefaults(),
+  grossBeatEffects: [],
   layers: ["Melody", "Harmony", "Bass", "Drums"].map((name, i) => ({
     id: `layer-${i}`,
     name,
@@ -449,6 +460,13 @@ export function validateProject(data) {
       opacity: num(s.opacity, 0.9, 0, 1),
       layerId: s.layerId,
       smudged: !!s.smudged,
+      ...(s.chop
+        ? {
+            chop: {
+              pointDuration: num(s.chop.pointDuration, 0.12, 0.0001, 32),
+            },
+          }
+        : {}),
       sound: {
         ...(s.brush === "Vox" || s.sound?.vowel !== undefined
           ? {
@@ -509,6 +527,51 @@ export function validateProject(data) {
       division: [4, 8, 16, 32].includes(c.division) ? c.division : 8,
     };
   });
+  p.grossBeat = normalizeGross(data.grossBeat);
+  if (
+    data.grossBeatEffects !== undefined &&
+    (!Array.isArray(data.grossBeatEffects) || data.grossBeatEffects.length > 32)
+  )
+    throw Error("A project supports at most 32 Gross Beat effects.");
+  const effectIds = new Set();
+  let archivePoints = total,
+    archiveStrokes = p.strokes.length;
+  p.grossBeatEffects = (data.grossBeatEffects || []).map((effect) => {
+    if (
+      !effect ||
+      typeof effect.id !== "string" ||
+      effectIds.has(effect.id) ||
+      !Array.isArray(effect.source) ||
+      !Array.isArray(effect.resultIds)
+    )
+      throw Error("Invalid Gross Beat source archive.");
+    effectIds.add(effect.id);
+    archiveStrokes += effect.source.length;
+    archivePoints += effect.source.reduce(
+      (n, s) => n + (s.points?.length || 0),
+      0,
+    );
+    if (archiveStrokes > 20000 || archivePoints > 1000000)
+      throw Error("Gross Beat source archives exceed the project limit.");
+    const source = validateProject({
+      ...data,
+      grossBeatEffects: [],
+      strokes: effect.source.map((s) => ({
+        ...s,
+        layerId: p.layers.some((l) => l.id === s.layerId)
+          ? s.layerId
+          : p.layers[0].id,
+      })),
+    }).strokes;
+    return {
+      id: effect.id,
+      settings: normalizeGross(effect.settings),
+      source,
+      resultIds: [
+        ...new Set(effect.resultIds.filter((id) => typeof id === "string")),
+      ].slice(0, 10000),
+    };
+  });
   p.bars = [1, 2, 4, 8].includes(data.bars) ? data.bars : 4;
   p.octaves = [1, 2, 3, 4].includes(data.octaves) ? data.octaves : 3;
   p.scale = SCALES[data.scale] ? data.scale : "C major";
@@ -537,7 +600,12 @@ export function validateProject(data) {
 }
 
 // Musical transformations and deterministic rain geometry
-export const MUSICAL_TOOLS = ["Musical Symmetry", "Echo Paint", "Rhythm Rain"];
+export const MUSICAL_TOOLS = [
+  "Gross Beat",
+  "Musical Symmetry",
+  "Echo Paint",
+  "Rhythm Rain",
+];
 export const symmetry = {
   mode: "Vertical",
   x: 0.5,
@@ -647,6 +715,16 @@ subscribe((type) => {
 // Echo previews use the same vector-to-note compiler as committed artwork.
 // They are transient: Apply makes them part of saved projects and exports.
 export function playbackProject() {
+  if (state.tool === "Gross Beat" && grossEditor.preview) {
+    const preview = grossPreview();
+    return {
+      ...state.project,
+      strokes: [
+        ...state.project.strokes.filter((s) => !preview.sourceIds.has(s.id)),
+        ...preview.marks,
+      ],
+    };
+  }
   return state.tool === "Echo Paint"
     ? {
         ...state.project,
@@ -756,11 +834,14 @@ export function echoMarks(strokes, project, options = echo) {
 }
 
 export function generatedMarks() {
+  if (state.tool === "Gross Beat")
+    return grossEditor.preview ? grossPreview().marks : [];
   const strokes = selectedMarks();
   return state.tool === "Echo Paint" ? echoMarks(strokes, state.project) : [];
 }
 
 export function applyMusicalTool() {
+  if (state.tool === "Gross Beat") return applyGrossBeat();
   const source = selectedMarks();
   if (!source.length) throw Error("Select one or more marks first.");
   const copies =
@@ -910,3 +991,141 @@ export function rainPattern(project) {
   }
   return result;
 }
+
+// Gross Beat settings are transient until Apply. Source snapshots and generated mark
+// IDs are persisted together, making restoration independent of selection or edits.
+export const grossBeat = grossDefaults();
+export const grossEditor = { preview: true, target: "auto", error: "" };
+let grossCache = { key: "", marks: [], sourceIds: new Set() };
+export function grossSource() {
+  const selected = selectedMarks();
+  if (grossEditor.target !== "layer" && selected.length) return selected;
+  if (grossEditor.target === "selection") return [];
+  return state.project.strokes.filter((s) => s.layerId === state.layer);
+}
+export function grossPreview() {
+  if (grossCache.key && grossCache.project === state.project) return grossCache;
+  const source = grossSource();
+  const key = JSON.stringify([
+    source,
+    grossBeat,
+    state.project.bars,
+    state.project.loop,
+  ]);
+  if (key === grossCache.key) return grossCache;
+  grossEditor.error = "";
+  let marks = [];
+  try {
+    marks = grossBeatMarks(source, state.project, grossBeat);
+  } catch (error) {
+    grossEditor.error = error.message;
+  }
+  const sourceIds = new Set(
+    grossEditor.error || grossBeat.keep ? [] : source.map((s) => s.id),
+  );
+  grossCache = { key, marks, sourceIds, project: state.project };
+  return grossCache;
+}
+export function updateGrossBeat() {
+  grossCache.key = "";
+  grossEditor.preview = true;
+  grossPreview();
+  emit("musical-preview");
+}
+export function resetGrossBeat() {
+  grossCache.key = "";
+  Object.assign(grossBeat, grossDefaults());
+  grossEditor.preview = false;
+  grossEditor.error = "";
+  emit("musical-preview");
+}
+export function applyGrossBeat() {
+  const source = grossSource();
+  if (!source.length) throw Error("Select drawing or choose a layer.");
+  const p = state.project;
+  if ((p.grossBeatEffects || []).length >= 32)
+    throw Error("Remove an effect first (maximum 32).");
+  const marks = grossBeatMarks(source, p, grossBeat);
+  const originalIds = new Set(source.map((s) => s.id));
+  const remaining = grossBeat.keep
+    ? p.strokes
+    : p.strokes.filter((s) => !originalIds.has(s.id));
+  const archive = (p.grossBeatEffects || []).flatMap((e) => e.source);
+  if (
+    remaining.length + marks.length > 10000 ||
+    marks.some((s) => s.points.length > 6000) ||
+    [...remaining, ...marks].reduce((n, s) => n + s.points.length, 0) >
+      500000 ||
+    remaining.length + marks.length + archive.length + source.length > 20000 ||
+    [...remaining, ...marks, ...archive, ...source].reduce(
+      (n, s) => n + s.points.length,
+      0,
+    ) > 1000000
+  )
+    throw Error(
+      "Gross Beat would exceed the project's stroke or point limit. Select fewer strokes or increase Rate.",
+    );
+  const copies = marks.map((s) => ({ ...s, id: uid() }));
+  change(() => {
+    p.grossBeat = normalizeGross(grossBeat);
+    (p.grossBeatEffects ??= []).push({
+      id: uid(),
+      settings: normalizeGross(grossBeat),
+      source: structuredClone(source),
+      resultIds: copies.map((s) => s.id),
+    });
+    p.strokes = [...remaining, ...copies];
+    state.selected = new Set(copies.map((s) => s.id));
+    grossEditor.preview = false;
+  });
+  emit("selection");
+}
+export function removeGrossBeat(effectId) {
+  const p = state.project,
+    effects = p.grossBeatEffects || [];
+  const effect = effects.find((e) => e.id === effectId) || effects.at(-1);
+  if (!effect) return;
+  const resultIds = new Set(effect.resultIds);
+  if (
+    effects.some(
+      (e) => e !== effect && e.source.some((s) => resultIds.has(s.id)),
+    )
+  )
+    throw Error("Remove the newer Gross Beat effect on these fragments first.");
+  const sourceIds = new Set(effect.source.map((s) => s.id));
+  const remaining = p.strokes.filter(
+    (s) => !resultIds.has(s.id) && !sourceIds.has(s.id),
+  );
+  const restored = structuredClone(effect.source).map((s) => ({
+    ...s,
+    layerId: p.layers.some((l) => l.id === s.layerId) ? s.layerId : state.layer,
+  }));
+  if (
+    remaining.length + restored.length > 10000 ||
+    [...remaining, ...restored].reduce((n, s) => n + s.points.length, 0) >
+      500000
+  )
+    throw Error(
+      "Make room for the original drawing before removing this effect.",
+    );
+  change(() => {
+    p.strokes = [...remaining, ...restored];
+    p.grossBeatEffects = effects.filter((e) => e.id !== effect.id);
+    state.selected = new Set(restored.map((s) => s.id));
+    grossEditor.preview = false;
+  });
+  emit("selection");
+}
+subscribe((type) => {
+  if (type === "load") {
+    Object.assign(grossBeat, normalizeGross(state.project.grossBeat));
+    grossEditor.preview = false;
+    grossEditor.target = "auto";
+  }
+  if (type === "tool" && state.tool === "Gross Beat")
+    grossEditor.preview = true;
+  if (type === "layer" && state.tool === "Gross Beat")
+    grossEditor.preview = true;
+  if (["load", "edit", "selection", "layer"].includes(type))
+    grossCache.key = "";
+});

@@ -2096,3 +2096,51 @@ body {
     transform: none !important;
   }
 }
+
+/* Original compact time-pattern editor, using the existing raised-panel controls. */
+.gross-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 8px 0;
+}
+.gross-step,
+.gross-step[aria-pressed="true"] {
+  position: relative;
+  min-width: 0;
+  min-height: 48px;
+  padding: 3px 2px;
+  touch-action: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(
+    to top,
+    var(--color-selected) var(--read-position),
+    var(--color-panel) var(--read-position)
+  );
+}
+.gross-step small {
+  font-size: 8px;
+}
+.gross-step[data-muted="true"] {
+  opacity: 0.5;
+}
+.gross-step[data-active="true"] {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.gross-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.gross-actions button {
+  flex: 1 1 auto;
+}
+.gross-info {
+  min-height: 2.5em;
+}

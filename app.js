@@ -37,6 +37,19 @@ import {
   copySelection,
   pasteSelection,
   canPasteSelection,
+  grossBeat,
+  grossEditor,
+  grossSource,
+  grossPreview,
+  updateGrossBeat,
+  resetGrossBeat,
+  applyGrossBeat,
+  removeGrossBeat,
+  GROSS_PRESETS,
+  GROSS_RATES,
+  GROSS_ACTIONS,
+  grossPreset,
+  randomGrossSteps,
 } from "./state.js";
 import {
   initSynthjump,
@@ -248,6 +261,10 @@ function selectTool(tool) {
   }
   $("#tool-settings").parentElement.open = true;
   emit("tool");
+  if (preset[tool]) previewSound().catch(reportAudioError);
+}
+function reportAudioError(error) {
+  $("#status-message").textContent = error.message;
 }
 function toolLabel(name) {
   const sounds = {
@@ -275,6 +292,7 @@ function renderTools() {
       "aria-pressed": name === state.tool,
     });
     const icons = {
+      "Gross Beat": '<path d="M3 4h19v17H3ZM7 7v11m5-11v11m5-11v11M4 13h17"/>',
       Vox: '<path d="M9 5a4 4 0 0 1 8 0v7a4 4 0 0 1-8 0ZM5 10v2a8 8 0 0 0 16 0v-2M13 20v4M9 24h8"/>',
       "Musical Symmetry":
         '<path d="M12 2v21M3 5h5v15H3l4-7ZM21 5h-5v15h5l-4-7Z"/>',
@@ -285,10 +303,335 @@ function renderTools() {
     };
     if (TOOL_COLORS[name])
       b.style.setProperty("--tool-color", TOOL_COLORS[name]);
-    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[TOOLS.filter((t) => t !== "Vox").indexOf(name)]}"/>`}</svg><span>${label}</span>`;
+    b.innerHTML = `<svg viewBox="0 0 25 25" aria-hidden="true">${icons[name] || `<path d="${paths[TOOLS.filter((t) => !["Vox", "Gross Beat"].includes(t)).indexOf(name)]}"/>`}</svg><span>${label}</span>`;
   });
 }
+function grossSettings(p) {
+  let selectedStep = 0;
+  const source = grossSource();
+  const info = el("p", { class: "gross-info", "aria-live": "polite" });
+  p.append(info);
+  const refreshInfo = () => {
+    const preview = grossPreview();
+    const layer = state.project.layers.find((l) => l.id === state.layer);
+    info.textContent =
+      grossEditor.error ||
+      (!state.selected.size ? "Select drawing or choose a layer. " : "") +
+        (source.length
+          ? `${source.length} strokes · ${grossEditor.target === "layer" || !state.selected.size ? layer?.name : "selection"}. ` +
+            (grossEditor.preview
+              ? `${preview.marks.length} preview fragments.`
+              : "Preview is off.")
+          : "");
+  };
+  const update = (key, value) => {
+    grossBeat[key] = value;
+    updateGrossBeat();
+    refreshInfo();
+  };
+  select(
+    p,
+    "Process",
+    [
+      ["auto", "Selection or active layer"],
+      ["selection", "Selected strokes"],
+      ["layer", "Active layer"],
+    ],
+    grossEditor.target,
+    (v) => {
+      grossEditor.target = v;
+      updateGrossBeat();
+      toolSettings();
+    },
+  );
+  select(
+    p,
+    "Gross Beat layer",
+    state.project.layers.map((l) => [l.id, l.name]),
+    state.layer,
+    (id) => {
+      state.layer = id;
+      grossEditor.target = "layer";
+      emit("layer");
+    },
+  );
+  const preset = select(
+    p,
+    "Preset",
+    GROSS_PRESETS,
+    grossBeat.preset,
+    (name) => {
+      Object.assign(grossBeat, grossPreset(name, grossBeat));
+      updateGrossBeat();
+      toolSettings();
+    },
+  );
+  select(
+    p,
+    "Rate",
+    GROSS_RATES.map((n) => [String(n), n === 1 ? "1 bar" : `1/${n}`]),
+    String(grossBeat.rate),
+    (v) => update("rate", +v),
+  );
+  select(
+    p,
+    "Speed",
+    [0.25, 0.5, 1, 2].map((n) => [String(n), `${n}x`]),
+    String(grossBeat.speed),
+    (v) => update("speed", +v),
+  );
+  select(
+    p,
+    "Direction",
+    ["Forward", "Reverse", "Alternating"],
+    grossBeat.direction,
+    (v) => update("direction", v),
+  );
+  range(p, "Gate (%)", grossBeat.gate * 100, 0, 100, 1, (v) =>
+    update("gate", v / 100),
+  );
+  p.append(
+    el("small", {}, "Gate cuts this percentage of each slice. 100% is silent."),
+  );
+  range(p, "Repeat", grossBeat.repeat, 1, 8, 1, (v) =>
+    update("repeat", Math.round(v)),
+  );
+  range(p, "Mix (%)", grossBeat.mix * 100, 0, 100, 1, (v) =>
+    update("mix", v / 100),
+  );
+  select(
+    p,
+    "Pattern Length",
+    [
+      ["1", "1 bar"],
+      ["2", "2 bars"],
+    ],
+    String(grossBeat.length),
+    (v) => update("length", +v),
+  );
+  checkbox(p, "Keep Original", grossBeat.keep, (v) => update("keep", v));
+  p.append(
+    el(
+      "small",
+      {},
+      "Unchecked sources are stored for Remove Effect. Kept originals play alongside the result.",
+    ),
+  );
+  const seedLabel = el("label", { class: "control" }, "Seed");
+  const seed = el("input", {
+    type: "number",
+    min: 0,
+    max: 4294967295,
+    step: 1,
+    value: grossBeat.seed,
+    "aria-label": "Seed",
+  });
+  seed.addEventListener("change", () => {
+    if (Number.isFinite(seed.valueAsNumber))
+      update("seed", Math.round(clamp(seed.valueAsNumber, 0, 4294967295)));
+    seed.value = grossBeat.seed;
+  });
+  seedLabel.append(seed);
+  p.append(seedLabel);
+  button(p, "Regenerate Seed", () => {
+    update("seed", (grossBeat.seed + 1) >>> 0);
+    seed.value = grossBeat.seed;
+  });
+  p.append(
+    el("h3", {}, "Custom pattern"),
+    el(
+      "small",
+      {},
+      "Click to toggle. Drag up/down to change the read position in the two-bar buffer. Right-click cycles the step action. Arrow keys adjust position.",
+    ),
+  );
+  const grid = el("div", {
+    class: "gross-grid",
+    role: "group",
+    "aria-label": "16-step pattern",
+  });
+  p.append(grid);
+  const cells = [];
+  let actionSelect, positionSlider, stepLabel;
+  const paint = () => {
+    cells.forEach((cell, i) => {
+      const step = grossBeat.steps[i];
+      cell.setAttribute("aria-pressed", String(step.on));
+      cell.setAttribute(
+        "aria-label",
+        `Step ${i + 1}: ${step.on ? step.action : "Off"}, position ${Math.round(step.position * 100)}%`,
+      );
+      cell.dataset.active = String(i === selectedStep);
+      cell.dataset.muted = String(!step.on || step.action === "Mute");
+      cell.style.setProperty(
+        "--read-position",
+        `${Math.round(step.position * 100)}%`,
+      );
+      cell.querySelector("small").textContent = step.on
+        ? { Forward: "FWD", Reverse: "REV", Repeat: "RPT", Mute: "MUTE" }[
+            step.action
+          ]
+        : "OFF";
+    });
+    if (actionSelect) {
+      actionSelect.value = grossBeat.steps[selectedStep].action;
+      positionSlider.value = Math.round(
+        grossBeat.steps[selectedStep].position * 100,
+      );
+      positionSlider
+        .closest(".control")
+        .querySelector('input[type="number"]').value = positionSlider.value;
+      stepLabel.textContent = `Step ${selectedStep + 1}`;
+    }
+  };
+  const editStep = () => {
+    grossBeat.preset = "Custom";
+    preset.value = "Custom";
+    updateGrossBeat();
+    paint();
+    refreshInfo();
+  };
+  for (let i = 0; i < 16; i++) {
+    const cell = el("button", {
+      type: "button",
+      class: "gross-step",
+      "data-step": i,
+    });
+    cell.append(el("span", {}, String(i + 1).padStart(2, "0")), el("small"));
+    let drag = null,
+      moved = false;
+    cell.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      selectedStep = i;
+      drag = { y: e.clientY, position: grossBeat.steps[i].position };
+      moved = false;
+      cell.setPointerCapture(e.pointerId);
+      paint();
+    });
+    cell.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      if (Math.abs(e.clientY - drag.y) > 3) moved = true;
+      if (moved) {
+        grossBeat.steps[i].position = clamp(
+          drag.position + (drag.y - e.clientY) / 120,
+        );
+        editStep();
+      }
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+      cell.addEventListener(type, () => {
+        drag = null;
+      });
+    cell.addEventListener("click", () => {
+      selectedStep = i;
+      if (!moved) grossBeat.steps[i].on = !grossBeat.steps[i].on;
+      moved = false;
+      editStep();
+    });
+    cell.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      selectedStep = i;
+      const step = grossBeat.steps[i];
+      step.action =
+        GROSS_ACTIONS[
+          (GROSS_ACTIONS.indexOf(step.action) + 1) % GROSS_ACTIONS.length
+        ];
+      editStep();
+    });
+    cell.addEventListener("keydown", (e) => {
+      if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      selectedStep = i;
+      const step = grossBeat.steps[i];
+      step.position =
+        e.key === "Home"
+          ? 0
+          : e.key === "End"
+            ? 1
+            : clamp(step.position + (e.key === "ArrowUp" ? 1 : -1) / 16);
+      editStep();
+    });
+    cells.push(cell);
+    grid.append(cell);
+  }
+  stepLabel = el("strong", {}, "Step 1");
+  p.append(stepLabel);
+  actionSelect = select(
+    p,
+    "Step action",
+    GROSS_ACTIONS,
+    grossBeat.steps[0].action,
+    (action) => {
+      grossBeat.steps[selectedStep].action = action;
+      editStep();
+    },
+  );
+  positionSlider = range(
+    p,
+    "Playback position (%)",
+    grossBeat.steps[0].position * 100,
+    0,
+    100,
+    1,
+    (v) => {
+      grossBeat.steps[selectedStep].position = v / 100;
+      editStep();
+    },
+  );
+  paint();
+  const actions = el("div", { class: "gross-actions" });
+  p.append(actions);
+  button(actions, "Clear", () => {
+    grossBeat.steps.forEach((s) => {
+      s.on = false;
+    });
+    editStep();
+  });
+  button(actions, "Randomize", () => {
+    grossBeat.seed = (grossBeat.seed + 1) >>> 0;
+    seed.value = grossBeat.seed;
+    grossBeat.steps = randomGrossSteps(grossBeat);
+    editStep();
+  });
+  const previewButton = button(actions, "Preview", async () => {
+    updateGrossBeat();
+    refreshInfo();
+    if (grossEditor.error) throw Error(grossEditor.error);
+    if (!state.playing) {
+      seekStart();
+      await play();
+    }
+  });
+  const applyButton = button(actions, "Apply", applyGrossBeat);
+  previewButton.disabled = applyButton.disabled = !source.length;
+  button(actions, "Reset", () => {
+    resetGrossBeat();
+    toolSettings();
+  });
+  const effects = state.project.grossBeatEffects || [];
+  let effectId = effects.at(-1)?.id;
+  if (effects.length)
+    select(
+      p,
+      "Applied effect",
+      [...effects]
+        .reverse()
+        .map((e, i) => [
+          e.id,
+          `${effects.length - i}. ${e.settings.preset} (${e.resultIds.length} fragments)`,
+        ]),
+      effectId,
+      (id) => {
+        effectId = id;
+      },
+    );
+  const remove = button(p, "Remove Effect", () => removeGrossBeat(effectId));
+  remove.disabled = !effects.length;
+  refreshInfo();
+}
+
 function musicalSettings(p) {
+  if (state.tool === "Gross Beat") return grossSettings(p);
   if (state.tool === "Rhythm Rain") {
     const clouds = state.project.rainClouds || [];
     // Rain Properties targets the selected cloud, or the defaults for the next cloud.
@@ -1084,7 +1427,11 @@ function sync(type) {
     $("#bar-position").textContent = "01";
     $("#beat-position").textContent = "01";
   }
-  if (["tool", "selection", "load", "init"].includes(type)) toolSettings();
+  if (
+    ["tool", "selection", "load", "init"].includes(type) ||
+    (type === "layer" && state.tool === "Gross Beat")
+  )
+    toolSettings();
   // Properties rebuild only when necessary, avoiding replacement of a focused input
   // during editing. Project edits also schedule local autosave.
   if (
